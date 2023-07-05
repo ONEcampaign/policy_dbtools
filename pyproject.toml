@@ -9,6 +9,8 @@ packages = [{include = "policy_dbtools"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
+pandas = "^2.0.3"
+pymongo = "^4.4.0"
 
 
 [build-system]

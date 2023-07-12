@@ -97,4 +97,26 @@ def test_set_config_overwrite():
     assert config['MONGODB']['MONGO_PASSWORD'] == 'mypassword'
 
 
+def test_create_uri_no_special_characters():
+    """Test _create_uri when no special characters are in the string arguemnts"""
+
+    # Test case 1: No special characters, quote_plus not needed
+    cluster = "my-cluster"
+    username = "my-username"
+    password = "my-password"
+    expected_uri = "mongodb+srv://my-username:my-password@my-cluster.sln0w.mongodb.net/?retryWrites=true&w=majority"
+
+    assert dbtools._create_uri(cluster, username, password) == expected_uri
+
+
+def test_create_uri_special_characters():
+    """Test _create_uri when special characters are in the string arguemnts for which quote_plus is needed"""
+
+    cluster = "my-cluster"
+    username = "my+username"
+    password = "my&password"
+    expected_uri = "mongodb+srv://my%2Busername:my%26password@my-cluster.sln0w.mongodb.net/?retryWrites=true&w=majority"
+
+    assert dbtools._create_uri(cluster, username, password) == expected_uri
+
 

@@ -8,10 +8,9 @@ import configparser
 from policy_dbtools.config import logger
 
 
-def set_config(username: str = None,
-               password: str = None,
-               cluster: str = None,
-               db: str = None) -> None:
+def set_config(
+    username: str = None, password: str = None, cluster: str = None, db: str = None
+) -> None:
     """Set configuration file for MongoDB connection.
 
     This functions allows you to set the configuration and credentials for the MongoDB connection,
@@ -27,27 +26,27 @@ def set_config(username: str = None,
     """
 
     config = configparser.ConfigParser()
-    config.read('config.ini')
+    config.read("config.ini")
 
     # if config file does not exist, create it
-    if not os.path.exists('config.ini'):
-        config['MONGODB'] = {}
+    if not os.path.exists("config.ini"):
+        config["MONGODB"] = {}
 
     # if username is provided, set in config file
     if username is not None:
-        config['MONGODB']['MONGO_USERNAME'] = username
+        config["MONGODB"]["MONGO_USERNAME"] = username
     # if password is provided, set in config file
     if password is not None:
-        config['MONGODB']['MONGO_PASSWORD'] = password
+        config["MONGODB"]["MONGO_PASSWORD"] = password
     # if cluster_name is provided, set in config file
     if cluster is not None:
-        config['MONGODB']['MONGO_CLUSTER'] = cluster
+        config["MONGODB"]["MONGO_CLUSTER"] = cluster
     # if db_name is provided, set in config file
     if db is not None:
-        config['MONGODB']['MONGO_DB_NAME'] = db
+        config["MONGODB"]["MONGO_DB_NAME"] = db
 
     # write config file
-    with open('config.ini', 'w') as configfile:
+    with open("config.ini", "w") as configfile:
         config.write(configfile)
 
 
@@ -63,8 +62,10 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
         str: MongoDB connection string.
     """
 
-    return f"mongodb+srv://{quote_plus(username)}:{quote_plus(password)}" \
-           f"@{cluster}.sln0w.mongodb.net/?retryWrites=true&w=majority"
+    return (
+        f"mongodb+srv://{quote_plus(username)}:{quote_plus(password)}"
+        f"@{cluster}.sln0w.mongodb.net/?retryWrites=true&w=majority"
+    )
 
 
 class PolicyClient:
@@ -81,12 +82,13 @@ class PolicyClient:
 
     """
 
-    def __init__(self,
-                 username: str = None,
-                 password: str = None,
-                 cluster: str | None = None,
-                 db: str | None = None,
-                 ):
+    def __init__(
+        self,
+        username: str = None,
+        password: str = None,
+        cluster: str | None = None,
+        db: str | None = None,
+    ):
         """Create a PolicyClient object and connect to the MongoDB cluster. If no arguments are provided, the credentials will attempt to be
         read from the configuration file. If the credentials are not provided in the configuration file
         file, an error will be raised.
@@ -103,23 +105,28 @@ class PolicyClient:
 
         # create uri
         config = configparser.ConfigParser()
-        config.read('config.ini')
+        config.read("config.ini")
         # if username or password or cluster are not provided in config file, raise error
-        if (config['MONGODB']['MONGO_USERNAME'] is None
-            or config['MONGODB']['MONGO_PASSWORD'] is None
-            or config['MONGODB']['MONGO_CLUSTER'] is None):
+        if (
+            not config.has_option("MONGODB", "MONGO_USERNAME")
+            or not config.has_option("MONGODB", "MONGO_PASSWORD")
+            or not config.has_option("MONGODB", "MONGO_CLUSTER")
+        ):
+            raise ValueError(
+                "Missing credentials. `username`, `password` and `cluster`"
+                " must provided or set using set_config()."
+            )
 
-            raise ValueError("Missing credentials. `username`, `password` and `cluster`"
-                             " must provided or set using set_config().")
-
-        config['MONGODB']['URI'] = _create_uri(config['MONGODB']['MONGO_CLUSTER'],
-                                               config['MONGODB']['MONGO_USERNAME'],
-                                               config['MONGODB']['MONGO_PASSWORD'])
+        config["MONGODB"]["URI"] = _create_uri(
+            config["MONGODB"]["MONGO_CLUSTER"],
+            config["MONGODB"]["MONGO_USERNAME"],
+            config["MONGODB"]["MONGO_PASSWORD"],
+        )
         # write config file
-        with open('config.ini', 'w') as configfile:
+        with open("config.ini", "w") as configfile:
             config.write(configfile)
 
-        self._client = None
+        self._client: MongoClient | None = None
         self.connect()
 
     def connect(self):
@@ -131,12 +138,12 @@ class PolicyClient:
 
         # get connection string from the config file and connect to the cluster
         config = configparser.ConfigParser()
-        config.read('config.ini')
-        self._client = MongoClient(config['MONGODB']['URI'])
+        config.read("config.ini")
+        self._client = MongoClient(config["MONGODB"]["URI"])
 
         # Send a ping to confirm a successful connection
         try:
-            self._client.admin.command('ping')
+            self._client.admin.command("ping")
             logger.info("Connection to MongoDB database established.")
         except Exception as e:
             raise e
@@ -148,24 +155,19 @@ class PolicyClient:
 
     def __enter__(self):
         """Enter context manager."""
+        logger.info("Entering context")
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Exit context manager."""
-
-        self._client.close()
-        self._client = None
-        self._db = None
-        logger.info("Closing connection to MongoDB database.")
+        logger.info("Exiting context")
+        self.close()
+        if exc_type is not None:
+            logger.exception(
+                "Exception occurred", exc_info=(exc_type, exc_value, traceback)
+            )
 
     @property
     def client(self) -> MongoClient:
         """MongoDB client object."""
         return self._client
-
-
-
-
-
-
-

@@ -127,7 +127,17 @@ class PolicyClient:
             config.write(configfile)
 
         self._client: MongoClient | None = None
+        self._db: MongoClient | None = None
+
         self.connect()
+
+        # if db_name is provided, set the database
+        if db is not None:
+            self.set_db(db)
+
+        # if db_name is not provided, try to read it from the config file
+        elif config.has_option("MONGODB", "MONGO_DB_NAME"):
+            self.set_db(config["MONGODB"]["MONGO_DB_NAME"])
 
     def connect(self):
         """Connect to the MongoDB cluster.
@@ -147,6 +157,39 @@ class PolicyClient:
             logger.info("Connection to MongoDB database established.")
         except Exception as e:
             raise e
+
+    def set_db(self, db_name: str = None) -> "PolicyClient":
+        """Set and connect to a database
+
+        This method allows a user to set the dabase and connect to it. If no database name
+        is provided, it will attempt to read the database name from the configuration file.
+        If a database name is provided, it will be set in the configuration file. If no database
+        name is provided and it does not exist in the configuration file, an error will be raised.
+
+        Args:
+            db_name (str): Name of the database to connect to. Defaults to None.
+        """
+
+        if db_name is None:
+            # read config file
+            config = configparser.ConfigParser()
+            config.read("config.ini")
+            # check if db_name is in config file
+            if config.has_option("MONGODB", "MONGO_DB_NAME"):
+                db_name = config["MONGODB"]["MONGO_DB_NAME"]
+            else:
+                raise ValueError(
+                    "Missing database name. `db_name` must provided or set in config file."
+                    " Use the method `set_db()` passing in the db name to set the database"
+                    " or use the function `set_config()` to set the db name in the config file."
+                )
+
+        # connect to the database
+        self._db = self._client[db_name]
+        # set db_name in config file
+        set_config(db=db_name)
+        logger.info(f"Connected to database {db_name}.")
+        return self
 
     def close(self):
         """Close connection to the MongoDB cluster."""
@@ -171,3 +214,15 @@ class PolicyClient:
     def client(self) -> MongoClient:
         """MongoDB client object."""
         return self._client
+
+    @property
+    def db(self) -> MongoClient:
+        """MongoDB database object. If no database has been set, an error will be raised."""
+
+        if self._db is None:
+            raise AttributeError(
+                "No database has been set. Use the method `set_db()` to set and connect to a "
+                "database."
+            )
+
+        return self._db

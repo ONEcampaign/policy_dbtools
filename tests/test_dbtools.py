@@ -2,12 +2,9 @@
 
 import pytest
 from unittest.mock import patch, Mock
-from unittest import mock
-import unittest
+from pymongo.database import Database
 import os
 import configparser
-import pymongo
-
 
 from policy_dbtools import dbtools
 
@@ -131,9 +128,10 @@ def test_create_uri_special_characters():
 class TestPolicyClient:
     @patch("policy_dbtools.dbtools.MongoClient")
     def test_policy_client_init(self, mock_mongo_client):
-        # Mock the MongoClient object
-        mock_client_instance = Mock()
-        mock_mongo_client.return_value = mock_client_instance
+        # Mock the MongoClient and Database instances
+        mock_client_instance = mock_mongo_client.return_value
+        mock_database_instance = Mock(spec=Database)
+        mock_client_instance.__getitem__.return_value = mock_database_instance
 
         # Initialize the PolicyClient
         policy_client = dbtools.PolicyClient(
@@ -144,14 +142,41 @@ class TestPolicyClient:
         )
 
         # Assertions
-
         assert policy_client.client == mock_client_instance
+        assert policy_client.db == mock_database_instance
+        # check that the db is set using the set_db method
+        assert mock_client_instance.set_db.called_once_with("test_db")
 
         # Clean up
         policy_client.close()
 
     @patch("policy_dbtools.dbtools.MongoClient")
-    def test_policy_client_init_no_arguments(self, mock_mongo_client):
+    def test_init_no_db_set(self, mock_mongo_client):
+        """Test when no db is specified"""
+
+        # Mock the MongoClient and Database instances
+        mock_client_instance = mock_mongo_client.return_value
+        mock_database_instance = Mock(spec=Database)
+        mock_client_instance.__getitem__.return_value = mock_database_instance
+
+        # Initialize the PolicyClient
+        policy_client = dbtools.PolicyClient(
+            username="test_user", password="test_password", cluster="test_cluster"
+        )
+
+        # Assertions after initialization
+        assert policy_client.client == mock_client_instance
+        assert policy_client._db is None
+
+        # assert error is raised when trying to access db
+        with pytest.raises(AttributeError):
+            _ = policy_client.db
+
+        # Clean up
+        policy_client.close()
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_policy_client_init_no_arguments_no_db(self, mock_mongo_client):
         """Test when no arguments are passed to the PolicyClient constructor and
         the config file exists with some data"""
 
@@ -175,6 +200,11 @@ class TestPolicyClient:
 
         # Assertions
         assert policy_client.client == mock_client_instance
+        assert policy_client._db is None
+
+        # assert that calling db property initializes raises an error
+        with pytest.raises(AttributeError):
+            _ = policy_client.db
 
         # Clean up
         policy_client.close()
@@ -192,9 +222,10 @@ class TestPolicyClient:
     def test_context_manager(self, mock_mongo_client):
         """Test PolicyClient as a context manager"""
 
-        # Mock the MongoClient object
-        mock_client_instance = Mock()
-        mock_mongo_client.return_value = mock_client_instance
+        # Mock the MongoClient and Database instances
+        mock_client_instance = mock_mongo_client.return_value
+        mock_database_instance = Mock(spec=Database)
+        mock_client_instance.__getitem__.return_value = mock_database_instance
 
         # Initialize the PolicyClient
         with dbtools.PolicyClient(
@@ -205,6 +236,46 @@ class TestPolicyClient:
         ) as policy_client:
             # Assertions
             assert policy_client.client == mock_client_instance
+            assert policy_client.db == mock_database_instance
 
         # assert that the closed method was called
         mock_client_instance.close.assert_called_once()
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_set_db(self, mock_mongo_client):
+        """Test set_db method"""
+
+        # Mock the MongoClient and Database instances
+        mock_client_instance = mock_mongo_client.return_value
+        mock_database_instance = Mock(spec=Database)
+        mock_client_instance.__getitem__.return_value = mock_database_instance
+
+        # Initialize the PolicyClient
+        policy_client_1 = dbtools.PolicyClient(
+            username="test_user",
+            password="test_password",
+            cluster="test_cluster",
+        )
+
+        assert policy_client_1._db is None
+
+        # test error when set_db is called with no db name
+        with pytest.raises(ValueError):
+            policy_client_1.set_db()
+
+        # set db
+        policy_client_1.set_db("test_db")
+
+        # assert db is set
+        assert policy_client_1._db == mock_database_instance
+        # assert db is set in the config file
+        config = configparser.ConfigParser()
+        config.read("config.ini")
+        assert config["MONGODB"]["MONGO_DB_NAME"] == "test_db"
+
+        # clean up
+        policy_client_1.close()
+
+        # test that the db is set when another PolicyClient is initialized
+        policy_client_2 = dbtools.PolicyClient()
+        assert policy_client_2._db == mock_database_instance

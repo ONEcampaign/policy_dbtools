@@ -16,43 +16,85 @@ def setup_teardown():
     if os.path.exists(config_file_path):
         os.remove(config_file_path)
 
-def test_set_config_without_arguments():
-    # Ensure the function doesn't modify the existing config file
-    config = configparser.ConfigParser()
-    config.read('config.ini')
-    original_config_data = config['MONGODB'].copy()
 
+def test_set_config_without_arguments_config_exists():
+    """Test set_config() with no arguments when config file exists with some arguments"""
+
+    # set config file with some data
+    original_config_data = {'MONGO_CLUSTER': 'mycluster',
+                            'MONGO_DB_NAME': 'mydb'}
+    config = configparser.ConfigParser()
+    config['MONGODB'] = original_config_data
+    with open('config.ini', 'w') as configfile:
+        config.write(configfile)
+
+    # set config file with no arguments
     dbtools.set_config()
 
-    config.read('config.ini')
-    assert config['MONGODB'] == original_config_data
-
-def test_set_config_with_arguments():
-    dbtools.set_config(username='myusername', password='mypassword', cluster='mycluster', db='mydb')
-
+    # check that the config file is unchanged
     config = configparser.ConfigParser()
     config.read('config.ini')
+    assert config['MONGODB']['MONGO_CLUSTER'] == original_config_data['MONGO_CLUSTER']
+    assert config['MONGODB']['MONGO_DB_NAME'] == original_config_data['MONGO_DB_NAME']
 
-    assert config['MONGODB']['MONGO_USERNAME'] == 'myusername'
-    assert config['MONGODB']['MONGO_PASSWORD'] == 'mypassword'
-    assert config['MONGODB']['MONGO_CLUSTER'] == 'mycluster'
-    assert config['MONGODB']['MONGO_DB_NAME'] == 'mydb'
 
-def test_set_config_no_existing_file():
-    config_file_path = 'config.ini'
+def test_set_config_without_arguments_config_does_not_exist():
+    """Test set_config() with no arguments when config file does not exist"""
 
-    if os.path.exists(config_file_path):
-        os.remove(config_file_path)
+    # set config file with no arguments
+    dbtools.set_config()
 
-    dbtools.set_config(username='myusername', password='mypassword', cluster='mycluster', db='mydb')
-
-    assert os.path.exists(config_file_path)
-
+    # check that the config file is is created with no data
     config = configparser.ConfigParser()
-    config.read(config_file_path)
+    config.read('config.ini')
+    assert config['MONGODB'] == {}
 
+
+def test_set_config_with_arguments_config_exists():
+    """Test set_config() with arguments when config file exists with some arguments
+    In this test the arguments passed to set_config should be different from the
+    data in the config file, to ensure that new data is added without old data being overwritten
+    """
+
+    # set config file with some data
+    original_config_data = {'MONGO_CLUSTER': 'mycluster'}
+    config = configparser.ConfigParser()
+    config['MONGODB'] = original_config_data
+    with open('config.ini', 'w') as configfile:
+        config.write(configfile)
+
+    # run set_config with some arguments
+    dbtools.set_config(username='myusername', password='mypassword')
+
+    # check that the config file is updated with the new data
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    assert config['MONGODB']['MONGO_CLUSTER'] == original_config_data['MONGO_CLUSTER']
     assert config['MONGODB']['MONGO_USERNAME'] == 'myusername'
     assert config['MONGODB']['MONGO_PASSWORD'] == 'mypassword'
-    assert config['MONGODB']['MONGO_CLUSTER'] == 'mycluster'
-    assert config['MONGODB']['MONGO_DB_NAME'] == 'mydb'
+
+
+def test_set_config_overwrite():
+    """Test set_config() with arguments that override data that exists in the config file"""
+
+    # set config file with some data
+    original_config_data = {'MONGO_CLUSTER': 'mycluster',
+                            'MONGO_DB_NAME': 'mydb'}
+    config = configparser.ConfigParser()
+    config['MONGODB'] = original_config_data
+    with open('config.ini', 'w') as configfile:
+        config.write(configfile)
+
+    # run set_config with some arguments
+    dbtools.set_config(username='myusername', password='mypassword', cluster='myothercluster', db='myotherdb')
+
+    # check that the config file is updated with the new data
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    assert config['MONGODB']['MONGO_CLUSTER'] == 'myothercluster'
+    assert config['MONGODB']['MONGO_DB_NAME'] == 'myotherdb'
+    assert config['MONGODB']['MONGO_USERNAME'] == 'myusername'
+    assert config['MONGODB']['MONGO_PASSWORD'] == 'mypassword'
+
+
 

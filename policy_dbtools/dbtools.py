@@ -66,23 +66,40 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
     return f"mongodb+srv://{quote_plus(username)}:{quote_plus(password)}" \
            f"@{cluster}.sln0w.mongodb.net/?retryWrites=true&w=majority"
 
-# cluster: str = 'globalpolicy', db_name: str = 'policy_data'
-
-
-
-
 
 class PolicyClient:
-    """Establish a connection to a MongoDB database and handle authentication.
+    """Class to handle connection to a ONE Policy MongoDB database.
+
+    This class handles the connection to a ONE Policy MongoDB database. It can be used as a context
+    manager to automatically close the connection when the context is exited. It can also be used as a
+    regular class, in which case the connection must be closed manually using the close() method.
+    It facilitates authentication be setting the optional arguments username, password, cluster, and db_name
+    to a configuration file used to create the connection string. If these arguments are not provided,
+    the credentials will try to be read from the config.ini file. If the config.ini file does not exist,
+    an error will be raised. Optionally, the set_config() function can be used to set the credentials.
+    If credentials are set there is no need to provide them as arguments to the class.
+
     """
 
-    def __init__(self, cluster: str | None = None, db_name: str | None = None,
-                 username: str = None, password: str = None):
-        """
+    def __init__(self,
+                 username: str = None,
+                 password: str = None,
+                 cluster: str | None = None,
+                 db: str | None = None,
+                 ):
+        """Create a PolicyClient object and connect to the MongoDB cluster. If no arguments are provided, the credentials will attempt to be
+        read from the configuration file. If the credentials are not provided in the configuration file
+        file, an error will be raised.
+
+        Args:
+            username (str): Username to authenticate with. Defaults to None.
+            password (str): Password to authenticate with. Defaults to None.
+            cluster (str): Name of the MongoDB cluster to connect to. Defaults to None.
+            db (str): Name of the database to connect to. Defaults to None.
         """
 
         # set arguments to config file if provided
-        set_config(username, password, cluster, db_name)
+        set_config(username, password, cluster, db)
 
         # create uri
         config = configparser.ConfigParser()
@@ -92,7 +109,8 @@ class PolicyClient:
             or config['MONGODB']['MONGO_PASSWORD'] is None
             or config['MONGODB']['MONGO_CLUSTER'] is None):
 
-            raise ValueError("Username, password, and cluster name must provided or must be set using set_config().")
+            raise ValueError("Missing credentials. `username`, `password` and `cluster`"
+                             " must provided or set using set_config().")
 
         config['MONGODB']['URI'] = _create_uri(config['MONGODB']['MONGO_CLUSTER'],
                                                config['MONGODB']['MONGO_USERNAME'],
@@ -104,12 +122,16 @@ class PolicyClient:
         self._client = None
         self.connect()
 
-    def connect(self) -> "PolicyClient":
-        """ """
+    def connect(self):
+        """Connect to the MongoDB cluster.
 
+        Returns:
+            PolicyClient: PolicyClient object.
+        """
+
+        # get connection string from the config file and connect to the cluster
         config = configparser.ConfigParser()
         config.read('config.ini')
-
         self._client = MongoClient(config['MONGODB']['URI'])
 
         # Send a ping to confirm a successful connection
@@ -119,19 +141,17 @@ class PolicyClient:
         except Exception as e:
             raise e
 
-        return self
-
     def close(self):
-        """ """
+        """Close connection to the MongoDB cluster."""
         self._client.close()
         logger.info("Connection to MongoDB database closed.")
 
     def __enter__(self):
-        """ """
+        """Enter context manager."""
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        """ """
+        """Exit context manager."""
 
         self._client.close()
         self._client = None
@@ -140,7 +160,7 @@ class PolicyClient:
 
     @property
     def client(self) -> MongoClient:
-        """ """
+        """MongoDB client object."""
         return self._client
 
 

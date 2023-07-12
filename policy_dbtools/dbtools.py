@@ -89,9 +89,13 @@ class PolicyClient:
         cluster: str | None = None,
         db: str | None = None,
     ):
-        """Create a PolicyClient object and connect to the MongoDB cluster. If no arguments are provided, the credentials will attempt to be
-        read from the configuration file. If the credentials are not provided in the configuration file
-        file, an error will be raised.
+        """Create a PolicyClient object and connect to the MongoDB cluster. If credentials
+         are not provided, they will attempt to be read from the configuration file.
+         If the credentials are not provided in the configuration file, an error will be raised.
+         Optionally specify the database to connect to. If not provided, the database name will
+         attempt to be read from the configuration file. If the database name is not provided in
+        the configuration file, the database will not be set. After instantiating, the database
+        can be set using the set_db() method.
 
         Args:
             username (str): Username to authenticate with. Defaults to None.

@@ -4,12 +4,22 @@ from pymongo import MongoClient
 import os
 from urllib.parse import quote_plus
 import configparser
+from pathlib import Path
 
 from policy_dbtools.config import logger
 
+CONFIG_PATH = Path(__file__).parent / "config.ini"
+
+
+def set_config_path(path: str) -> None:
+    """Set the path to the config.ini file."""
+
+    global CONFIG_PATH
+    CONFIG_PATH = Path(path).resolve()
+
 
 def set_config(
-    username: str = None, password: str = None, cluster: str = None, db: str = None
+    username: str = None, password: str = None, cluster: str = None
 ) -> None:
     """Set configuration file for MongoDB connection.
 
@@ -21,15 +31,13 @@ def set_config(
         username (str): Username to authenticate with.
         password (str): Password to authenticate with.
         cluster (str): Name of the MongoDB cluster to connect to.
-        db (str): Name of the database to connect to.
-
     """
 
     config = configparser.ConfigParser()
-    config.read("config.ini")
+    config.read(CONFIG_PATH)
 
     # if config file does not exist, create it
-    if not os.path.exists("config.ini"):
+    if not os.path.exists(CONFIG_PATH):
         config["MONGODB"] = {}
 
     # if username is provided, set in config file
@@ -41,12 +49,9 @@ def set_config(
     # if cluster_name is provided, set in config file
     if cluster is not None:
         config["MONGODB"]["MONGO_CLUSTER"] = cluster
-    # if db_name is provided, set in config file
-    if db is not None:
-        config["MONGODB"]["MONGO_DB_NAME"] = db
 
     # write config file
-    with open("config.ini", "w") as configfile:
+    with open(CONFIG_PATH, "w") as configfile:
         config.write(configfile)
 
 
@@ -68,92 +73,98 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
     )
 
 
-class PolicyClient:
-    """Class to handle connection to a ONE Policy MongoDB database.
+def _check_credentials(username: str = None, password: str = None, cluster: str = None) -> dict:
+    """Checks credentials required for MongoDB connection.
 
-    This class handles the connection to a ONE Policy MongoDB database. It can be used as a context
-    manager to automatically close the connection when the context is exited. It can also be used as a
-    regular class, in which case the connection must be closed manually using the close() method.
-    It facilitates authentication be setting the optional arguments username, password, cluster, and db_name
-    to a configuration file used to create the connection string. If these arguments are not provided,
-    the credentials will try to be read from the config.ini file. If the config.ini file does not exist,
-    an error will be raised. Optionally, the set_config() function can be used to set the credentials.
-    If credentials are set there is no need to provide them as arguments to the class.
+    If credentials are not provided, they will attempt to be read from the configuration file.
+    If the credentials are not provided in the configuration file, an error will be raised.
 
+    Args:
+        username (str): Username to authenticate with.
+        password (str): Password to authenticate with.
+        cluster (str): Name of the MongoDB cluster to connect to.
+
+    Returns:
+        Dictionary containing the username, password, and cluster name.
     """
 
-    def __init__(
-        self,
-        username: str = None,
-        password: str = None,
-        cluster: str | None = None,
-        db: str | None = None,
-    ):
-        """Create a PolicyClient object and connect to the MongoDB cluster. If credentials
-         are not provided, they will attempt to be read from the configuration file.
-         If the credentials are not provided in the configuration file, an error will be raised.
-         Optionally specify the database to connect to. If not provided, the database name will
-         attempt to be read from the configuration file. If the database name is not provided in
-        the configuration file, the database will not be set. After instantiating, the database
-        can be set using the set_db() method.
+    # if an argument is not provided check the config file
+    if username is None or password is None or cluster is None:
+        if not os.path.exists(CONFIG_PATH):
+            raise ValueError("No credentials provided and config.ini file does not exist."
+                             "Provide credentials or set credentials using set_config().")
+        else:
+            config = configparser.ConfigParser()
+            config.read(CONFIG_PATH)
 
-        Args:
-            username (str): Username to authenticate with. Defaults to None.
-            password (str): Password to authenticate with. Defaults to None.
-            cluster (str): Name of the MongoDB cluster to connect to. Defaults to None.
-            db (str): Name of the database to connect to. Defaults to None.
-        """
+            # if username is not provided
+            if username is None:
+                if not config.has_option("MONGODB", "MONGO_USERNAME"):
+                    raise ValueError("Missing credentials. `username` must provided or "
+                                     "set using set_config().")
+                username = config["MONGODB"]["MONGO_USERNAME"]
 
-        # set arguments to config file if provided
-        set_config(username, password, cluster, db)
+            # if password is not provided
+            if password is None:
+                if not config.has_option("MONGODB", "MONGO_PASSWORD"):
+                    raise ValueError("Missing credentials. `password` must provided or "
+                                     "set using set_config().")
+                password = config["MONGODB"]["MONGO_PASSWORD"]
 
-        # create uri
-        config = configparser.ConfigParser()
-        config.read("config.ini")
-        # if username or password or cluster are not provided in config file, raise error
-        if (
-            not config.has_option("MONGODB", "MONGO_USERNAME")
-            or not config.has_option("MONGODB", "MONGO_PASSWORD")
-            or not config.has_option("MONGODB", "MONGO_CLUSTER")
-        ):
-            raise ValueError(
-                "Missing credentials. `username`, `password` and `cluster`"
-                " must provided or set using set_config()."
-            )
+            # if cluster is not provided
+            if cluster is None:
+                if not config.has_option("MONGODB", "MONGO_CLUSTER"):
+                    raise ValueError(
+                        "Missing credentials. `cluster` must provided or "
+                        "set using set_config().")
+                cluster = config["MONGODB"]["MONGO_CLUSTER"]
 
-        config["MONGODB"]["URI"] = _create_uri(
-            config["MONGODB"]["MONGO_CLUSTER"],
-            config["MONGODB"]["MONGO_USERNAME"],
-            config["MONGODB"]["MONGO_PASSWORD"],
-        )
-        # write config file
-        with open("config.ini", "w") as configfile:
-            config.write(configfile)
+    return {"username": username, "password": password, "cluster": cluster}
 
-        self._client: MongoClient | None = None
-        self._db: MongoClient | None = None
 
-        self.connect()
+class PolicyCursor:
+    """Class to handle connection to a MongoDB database.
 
-        # if db_name is provided, set the database
-        if db is not None:
-            self.set_db(db)
+    This class handles the connection to a ONE Policy MongoDB database. It can be used as a context
+    manager to automatically close the connection when the context is exited. It can also be used
+    as a regular class, in which case the connection must be closed manually using the
+    close() method. A connection is established when the object is initialized. Credentials can be
+    provided when the object is initialized or they can be read from the config.ini file. If the
+    config file does not exist and credentials are not provided, an error will be raised.
 
-        # if db_name is not provided, try to read it from the config file
-        elif config.has_option("MONGODB", "MONGO_DB_NAME"):
-            self.set_db(config["MONGODB"]["MONGO_DB_NAME"])
+    Args:
+        username: Username to authenticate with. If not provided, will attempt to read from
+            config.ini file.
+        password: Password to authenticate with. If not provided, will attempt to read from
+            config.ini file.
+        cluster: Name of the MongoDB cluster to connect to. If not provided, will attempt to
+            read from config.ini file.
+    """
 
-    def connect(self):
+    def __init__(self, username: str = None, password: str = None, cluster: str = None):
+        """Initialize the PolicyCursor object."""
+
+        self._client = None
+        self.connect(username, password, cluster)
+
+    def connect(self, username: str = None, password: str = None, cluster: str = None) -> "PolicyCursor":
         """Connect to the MongoDB cluster.
 
+        Args:
+            username: Username to authenticate with. If not provided, will attempt to read from
+                config.ini file.
+            password: Password to authenticate with. If not provided, will attempt to read from
+                config.ini file.
+            cluster: Name of the MongoDB cluster to connect to. If not provided, will attempt to
+                read from config.ini file.
+
         Returns:
-            PolicyClient: PolicyClient object.
+            PolicyCursor object.
         """
 
-        # get connection string from the config file and connect to the cluster
-        config = configparser.ConfigParser()
-        config.read("config.ini")
-        self._client = MongoClient(config["MONGODB"]["URI"])
+        credentials = _check_credentials(username, password, cluster)
+        uri = _create_uri(**credentials)
+        self._client = MongoClient(uri)
 
         # Send a ping to confirm a successful connection
         try:
@@ -162,51 +173,23 @@ class PolicyClient:
         except Exception as e:
             raise e
 
-    def set_db(self, db_name: str = None) -> "PolicyClient":
-        """Set and connect to a database
-
-        This method allows a user to set the dabase and connect to it. If no database name
-        is provided, it will attempt to read the database name from the configuration file.
-        If a database name is provided, it will be set in the configuration file. If no database
-        name is provided and it does not exist in the configuration file, an error will be raised.
-
-        Args:
-            db_name (str): Name of the database to connect to. Defaults to None.
-        """
-
-        if db_name is None:
-            # read config file
-            config = configparser.ConfigParser()
-            config.read("config.ini")
-            # check if db_name is in config file
-            if config.has_option("MONGODB", "MONGO_DB_NAME"):
-                db_name = config["MONGODB"]["MONGO_DB_NAME"]
-            else:
-                raise ValueError(
-                    "Missing database name. `db_name` must provided or set in config file."
-                    " Use the method `set_db()` passing in the db name to set the database"
-                    " or use the function `set_config()` to set the db name in the config file."
-                )
-
-        # connect to the database
-        self._db = self._client[db_name]
-        # set db_name in config file
-        set_config(db=db_name)
-        logger.info(f"Connected to database {db_name}.")
         return self
 
-    def close(self):
+    def close(self) -> None:
         """Close connection to the MongoDB cluster."""
+
         self._client.close()
         logger.info("Connection to MongoDB database closed.")
 
     def __enter__(self):
         """Enter context manager."""
+
         logger.info("Entering context")
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Exit context manager."""
+
         logger.info("Exiting context")
         self.close()
         if exc_type is not None:
@@ -219,14 +202,21 @@ class PolicyClient:
         """MongoDB client object."""
         return self._client
 
-    @property
-    def db(self) -> MongoClient:
-        """MongoDB database object. If no database has been set, an error will be raised."""
 
-        if self._db is None:
-            raise AttributeError(
-                "No database has been set. Use the method `set_db()` to set and connect to a "
-                "database."
-            )
+class PolicyReader:
+    """Class to read data from a MongoDB database."""
 
-        return self._db
+    def __init__(self, client: MongoClient):
+        """Initialize the PolicyReader object."""
+
+        self._client = client
+
+
+class PolicyWriter:
+    """Class to write data from a MongoDB database."""
+
+    def __init__(self, client: MongoClient):
+        """Initialize the PolicyReader object."""
+
+        self._client = client
+

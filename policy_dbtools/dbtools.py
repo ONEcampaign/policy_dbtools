@@ -18,9 +18,7 @@ def set_config_path(path: str) -> None:
     CONFIG_PATH = Path(path).resolve()
 
 
-def set_config(
-    username: str = None, password: str = None, cluster: str = None
-) -> None:
+def set_config(username: str = None, password: str = None, cluster: str = None) -> None:
     """Set configuration file for MongoDB connection.
 
     This functions allows you to set the configuration and credentials for the MongoDB connection,
@@ -73,7 +71,9 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
     )
 
 
-def _check_credentials(username: str = None, password: str = None, cluster: str = None) -> dict:
+def _check_credentials(
+    username: str = None, password: str = None, cluster: str = None
+) -> dict:
     """Checks credentials required for MongoDB connection.
 
     If credentials are not provided, they will attempt to be read from the configuration file.
@@ -91,8 +91,10 @@ def _check_credentials(username: str = None, password: str = None, cluster: str 
     # if an argument is not provided check the config file
     if username is None or password is None or cluster is None:
         if not os.path.exists(CONFIG_PATH):
-            raise ValueError("No credentials provided and config.ini file does not exist."
-                             "Provide credentials or set credentials using set_config().")
+            raise ValueError(
+                "No credentials provided and config.ini file does not exist."
+                "Provide credentials or set credentials using set_config()."
+            )
         else:
             config = configparser.ConfigParser()
             config.read(CONFIG_PATH)
@@ -100,15 +102,19 @@ def _check_credentials(username: str = None, password: str = None, cluster: str 
             # if username is not provided
             if username is None:
                 if not config.has_option("MONGODB", "MONGO_USERNAME"):
-                    raise ValueError("Missing credentials. `username` must provided or "
-                                     "set using set_config().")
+                    raise ValueError(
+                        "Missing credentials. `username` must provided or "
+                        "set using set_config()."
+                    )
                 username = config["MONGODB"]["MONGO_USERNAME"]
 
             # if password is not provided
             if password is None:
                 if not config.has_option("MONGODB", "MONGO_PASSWORD"):
-                    raise ValueError("Missing credentials. `password` must provided or "
-                                     "set using set_config().")
+                    raise ValueError(
+                        "Missing credentials. `password` must provided or "
+                        "set using set_config()."
+                    )
                 password = config["MONGODB"]["MONGO_PASSWORD"]
 
             # if cluster is not provided
@@ -116,7 +122,8 @@ def _check_credentials(username: str = None, password: str = None, cluster: str 
                 if not config.has_option("MONGODB", "MONGO_CLUSTER"):
                     raise ValueError(
                         "Missing credentials. `cluster` must provided or "
-                        "set using set_config().")
+                        "set using set_config()."
+                    )
                 cluster = config["MONGODB"]["MONGO_CLUSTER"]
 
     return {"username": username, "password": password, "cluster": cluster}
@@ -145,9 +152,12 @@ class PolicyCursor:
         """Initialize the PolicyCursor object."""
 
         self._client = None
-        self.connect(username, password, cluster)
+        credentials = _check_credentials(username, password, cluster)
+        self.__uri = _create_uri(**credentials)
 
-    def connect(self, username: str = None, password: str = None, cluster: str = None) -> "PolicyCursor":
+    def connect(
+        self, username: str = None, password: str = None, cluster: str = None
+    ) -> "PolicyCursor":
         """Connect to the MongoDB cluster.
 
         Args:
@@ -162,9 +172,7 @@ class PolicyCursor:
             PolicyCursor object.
         """
 
-        credentials = _check_credentials(username, password, cluster)
-        uri = _create_uri(**credentials)
-        self._client = MongoClient(uri)
+        self._client = MongoClient(self.__uri)
 
         # Send a ping to confirm a successful connection
         try:
@@ -206,10 +214,14 @@ class PolicyCursor:
 class PolicyReader:
     """Class to read data from a MongoDB database."""
 
-    def __init__(self, client: MongoClient):
+    def __init__(self, cursor: PolicyCursor):
         """Initialize the PolicyReader object."""
 
-        self._client = client
+        self._cursor = cursor
+
+    def read_databases(self):
+        with self._cursor.connect() as cursor:
+            return cursor.client.list_database_names()
 
 
 class PolicyWriter:
@@ -220,3 +232,10 @@ class PolicyWriter:
 
         self._client = client
 
+
+if __name__ == "__main__":
+    p_cursor = PolicyCursor()  # handles proper authentication
+    reader = PolicyReader(p_cursor)  # makes reading stuff more convenient
+    data_bases = (
+        reader.read_databases()
+    )  # gets list of databases, establishing and killing the connection

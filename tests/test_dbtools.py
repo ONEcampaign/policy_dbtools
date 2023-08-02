@@ -1,8 +1,9 @@
 """Tests for dbtools.py"""
 
 import pytest
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, MagicMock
 from pymongo.database import Database
+from pymongo.collection import Collection
 import os
 import configparser
 from pathlib import Path
@@ -260,14 +261,62 @@ def test_test_connection_other_failed():
     client.admin.command.assert_called_once_with("ping")
 
 
+def test_check_valid_db():
+    """Test check_valid_db function"""
+
+    # Create a Mock MongoClient
+    client = Mock(spec=MongoClient)
+    client.list_database_names.return_value = ["test_db"]
+
+    assert dbtools.check_valid_db("test_db", client) == True
+
+    # check error
+    with pytest.raises(ValueError):
+        dbtools.check_valid_db("test_db_2", client)
+
+
+class TestCheckValidCollection:
+    """Tests for check_valid_collection"""
+
+    def mock_client(self, mock_mongo_client):
+
+        # Mock the MongoClient and Database instances
+        mock_client_instance = mock_mongo_client.return_value
+        mock_database_instance = Mock(spec=Database)
+        mock_client_instance.__getitem__.return_value = mock_database_instance
+
+        # mock the close method
+        mock_client_instance.close.return_value = None
+
+        mock_client_instance.list_database_names.return_value = ["test_db"]
+        mock_database_instance.list_collection_names.return_value = ["test_collection"]
+
+        return mock_client_instance
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_check_valid_collection(self, mock_mongo_client):
+        """ """
+
+        mock_client_instance = self.mock_client(mock_mongo_client)
+        assert dbtools.check_valid_collection('test_collection', 'test_db', mock_client_instance) is True
+
+        with pytest.raises(ValueError):
+            dbtools.check_valid_collection('test_collection_invalid', 'test_db', mock_client_instance)
+
+
 class TestAuthenticatedCursor:
     """Tests for the AuthentificatedCursor class"""
 
     def mock_client(self, mock_mongo_client):
         # Mock the MongoClient and Database instances
         mock_client_instance = mock_mongo_client.return_value
-        mock_database_instance = Mock(spec=Database)
+
+        mock_database_instance = MagicMock(spec=Database)
         mock_client_instance.__getitem__.return_value = mock_database_instance
+
+        # Mock collection
+        mock_collection_instance = MagicMock(spec=Collection)
+        mock_database_instance.__getitem__.return_value = mock_collection_instance
 
         # Create a Mock for the `admin` attribute and its `command` method
         admin = Mock()
@@ -276,6 +325,11 @@ class TestAuthenticatedCursor:
 
         # mock the close method
         mock_client_instance.close.return_value = None
+
+        # mock the list_database_names method
+        mock_client_instance.list_database_names.return_value = ["test_db"]
+        mock_database_instance.list_collection_names.return_value = ["test_collection"]
+
 
         return mock_client_instance
 
@@ -288,11 +342,19 @@ class TestAuthenticatedCursor:
         cursor = dbtools.AuthenticatedCursor(
                     username="test_user",
                     password="test_password",
-                    cluster="test_cluster")
+                    cluster="test_cluster",
+                    db_name="test_db",
+                    collection_name="test_collection",)
 
         # check that __uri is not None
         assert cursor._AuthenticatedCursor__uri is not None
         mock_client_instance.admin.command.assert_called_once_with("ping") # check that the connection was tested
+
+        assert cursor._db_name == "test_db" # check that the db name is set
+        mock_client_instance.list_database_names.assert_called_once() # check that the db was checked
+
+        assert cursor._collection_name == "test_collection" # check that the collection name is set
+        mock_client_instance.__getitem__.assert_called_once_with("test_db") # check that the collection was checked
 
     @patch("policy_dbtools.dbtools.MongoClient")
     def test_init_no_credentials(self, mock_mongo_client):
@@ -358,6 +420,75 @@ class TestAuthenticatedCursor:
 
         # assert that the the close method was called 3 times
         assert mock_client_instance.close.call_count == 2
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_set_db(self, mock_mongo_client):
+        """Test setting the database name"""
+
+        self.mock_client(mock_mongo_client)
+
+        cursor = dbtools.AuthenticatedCursor(
+            username="test_user",
+            password="test_password",
+            cluster="test_cluster")
+
+        cursor.set_db("test_db")
+        assert cursor._db_name == "test_db"
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_db(self, mock_mongo_client):
+        """Test the db property"""
+
+        mock_mongo_client = self.mock_client(mock_mongo_client)
+
+        cursor = dbtools.AuthenticatedCursor(
+            username="test_user",
+            password="test_password",
+            cluster="test_cluster")
+
+        cursor.connect()
+
+        cursor.set_db("test_db")
+        assert cursor.db == mock_mongo_client["test_db"]
+        assert isinstance(cursor.db, Database)
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_set_collection(self, mock_mongo_client):
+        """Test setting the collection"""
+
+        self.mock_client(mock_mongo_client)
+        cursor = dbtools.AuthenticatedCursor(
+            username="test_user",
+            password="test_password",
+            cluster="test_cluster")
+
+        cursor._db_name = "test_db"
+
+        cursor.set_collection("test_collection")
+        assert cursor._collection_name == "test_collection"
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_collection(self, mock_mongo_client):
+        """Test the collection property"""
+
+        mock_mongo_client = self.mock_client(mock_mongo_client)
+
+        cursor = dbtools.AuthenticatedCursor(
+            username="test_user",
+            password="test_password",
+            cluster="test_cluster")
+
+        cursor.connect()
+        cursor._db_name = "test_db"
+        cursor._collection_name = "test_collection"
+
+        assert isinstance(cursor.collection, Collection)
+        assert cursor.collection == mock_mongo_client["test_db"]["test_collection"]
+
+
+
+
+
 
 
 

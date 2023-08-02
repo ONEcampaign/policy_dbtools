@@ -1,6 +1,8 @@
 """Tools to handle connection to a MongoDB database."""
 
 from pymongo import MongoClient
+from pymongo.database import Database
+from pymongo.collection import Collection
 import os
 from urllib.parse import quote_plus
 import configparser
@@ -143,6 +145,43 @@ def test_connection(client: MongoClient) -> None:
         raise e
 
 
+def check_valid_db(db_name: str, client: MongoClient) -> bool:
+    """Check if a database exists. If it does not, raise an error.
+
+    Args:
+        db_name: Name of the database to check.
+        client: MongoClient object.
+
+    Returns:
+        True if the database exists.
+    """
+
+    db_list = client.list_database_names()
+    if db_name not in db_list:
+        raise ValueError(f"Database {db_name} does not exist.")
+    client.close()
+    return True
+
+
+def check_valid_collection(collection_name: str, db_name: str, client: MongoClient) -> bool:
+    """Check if a collection exists in a database. If it does not, raise an error.
+
+    Args:
+        collection_name: Name of the collection to check.
+        db_name: Name of the database to check.
+        client: MongoClient object.
+
+    Returns:
+        True if the collection exists.
+    """
+
+    collection_list = client[db_name].list_collection_names()
+    if collection_name not in collection_list:
+        raise ValueError(f"Collection {collection_name} does not exist in database {db_name}.")
+    client.close()
+    return True
+
+
 class AuthenticatedCursor:
     """An authenticated cursor to a MongoDB database.
 
@@ -163,15 +202,24 @@ class AuthenticatedCursor:
             read from config.ini file.
     """
 
-    def __init__(self, username: str = None, password: str = None, cluster: str = None):
+    def __init__(self, username: str = None, password: str = None, cluster: str = None,
+                 db_name: str = None, collection_name: str = None):
         """Initialize the AuthenticatedCursor object."""
 
         credentials = _check_credentials(username, password, cluster)
         self.__uri = _create_uri(**credentials)
 
+        # test connection to the cluster
         test_connection(MongoClient(self.__uri))
-
         self._client = None  # client object
+
+        self._db_name = None
+        if db_name is not None:
+            self.set_db(db_name)
+
+        self._collection_name = None
+        if collection_name is not None:
+            self.set_collection(collection_name)
 
     def connect(self):
         """Connect to the MongoDB database."""
@@ -204,53 +252,70 @@ class AuthenticatedCursor:
         """MongoDB client object."""
         return self._client
 
+    def set_db(self, db_name: str):
+        """Set the database to connect to."""
+        check_valid_db(db_name, MongoClient(self.__uri))
+        self._db_name = db_name
 
-def check_valid_db(db_name: str, cursor: AuthenticatedCursor) -> bool:
-    """Check if a database exists. If it does not, raise an error.
+    @property
+    def db(self) -> Database:
+        """MongoDB client object."""
 
-    Args:
-        db_name: Name of the database to check.
-        cursor: AuthenticatedCursor object to connect to the database.
+        if self._db_name is None:
+            raise ValueError("Database not set. Use set_db() to set the database.")
+        if self._client is None:
+            raise ValueError("Client not connected. Use connect() to connect to the database.")
+        return self._client[self._db_name]
 
-    Returns:
-        True if the database exists.
-    """
+    def set_collection(self, collection_name: str) -> None:
+        """Set the collection to connect to."""
 
-    with cursor as cursor:
-        cursor.connect()
-        db_list = cursor.client.list_database_names()
-        if db_name not in db_list:
-            raise ValueError(f"Database {db_name} does not exist.")
-        return True
+        if self._db_name is None:
+            raise ValueError("Database not set. Use set_db() to set the database.")
+
+        check_valid_collection(collection_name, self._db_name, MongoClient(self.__uri))
+        self._collection_name = collection_name
+
+    @property
+    def collection(self) -> Collection:
+        """ """
+
+        if self._collection_name is None:
+            raise ValueError("Collection not set. Use set_collection() to set the collection.")
+        if self._client is None:
+            raise ValueError("Client not connected. Use connect() to connect to the database.")
+        return self.db[self._collection_name]
 
 
-def check_valid_collection(db_name: str, collection_name: str, cursor: AuthenticatedCursor) -> bool:
-    """Check if a collection exists. If it does not, raise an error.
-
-    Args:
-        db_name: Name of the database to check.
-        collection_name: Name of the collection to check.
-        cursor: AuthenticatedCursor object to connect to the database.
-
-    Returns:
-        True if the collection exists.
-    """
-
-    with cursor as cursor:
-        cursor.connect()
-        collection_list = cursor.client[db_name].list_collection_names()
-        if collection_name not in collection_list:
-            raise ValueError(f"Collection {collection_name} does not exist.")
-        return True
 
 
 class PolicyReader:
     """Class to read data from a MongoDB database."""
 
-    def __init__(self, cursor: AuthenticatedCursor, db_name = 'policy_data'):
+    def __init__(self, cursor: AuthenticatedCursor, db_name: str = None):
         """Initialize the PolicyReader object."""
 
         self._cursor = cursor
+
+        if db_name is not None:
+            check_valid_db(db_name, cursor)
+            self._db_name = db_name
+
+        else:
+            self._db_name = None
+
+    def set_db(self, db_name: str):
+        """Set the database to read from."""
+
+        check_valid_db(db_name, self._cursor)
+        self._db_name = db_name
+
+    @property
+    def db_name(self):
+        """Name of the database to read from."""
+        if self._db_name is None:
+            raise ValueError("No database set. Use set_db() to set the database.")
+        return self._db_name
 
     def list_databases(self):
         """return a list of available databases"""

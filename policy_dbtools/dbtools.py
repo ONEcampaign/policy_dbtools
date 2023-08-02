@@ -205,6 +205,45 @@ class AuthenticatedCursor:
         return self._client
 
 
+def check_valid_db(db_name: str, cursor: AuthenticatedCursor) -> bool:
+    """Check if a database exists. If it does not, raise an error.
+
+    Args:
+        db_name: Name of the database to check.
+        cursor: AuthenticatedCursor object to connect to the database.
+
+    Returns:
+        True if the database exists.
+    """
+
+    with cursor as cursor:
+        cursor.connect()
+        db_list = cursor.client.list_database_names()
+        if db_name not in db_list:
+            raise ValueError(f"Database {db_name} does not exist.")
+        return True
+
+
+def check_valid_collection(db_name: str, collection_name: str, cursor: AuthenticatedCursor) -> bool:
+    """Check if a collection exists. If it does not, raise an error.
+
+    Args:
+        db_name: Name of the database to check.
+        collection_name: Name of the collection to check.
+        cursor: AuthenticatedCursor object to connect to the database.
+
+    Returns:
+        True if the collection exists.
+    """
+
+    with cursor as cursor:
+        cursor.connect()
+        collection_list = cursor.client[db_name].list_collection_names()
+        if collection_name not in collection_list:
+            raise ValueError(f"Collection {collection_name} does not exist.")
+        return True
+
+
 class PolicyReader:
     """Class to read data from a MongoDB database."""
 

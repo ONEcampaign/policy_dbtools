@@ -1,5 +1,5 @@
 """Tools to handle connection to a MongoDB database."""
-
+import pandas as pd
 from pymongo import MongoClient
 from pymongo.database import Database
 from pymongo.collection import Collection
@@ -133,8 +133,8 @@ def _check_credentials(
     return {"username": username, "password": password, "cluster": cluster}
 
 
-def test_connection(client: MongoClient) -> None:
-    """ Test connection to MongoDB database."""
+def check_connection(client: MongoClient) -> None:
+    """Test connection to MongoDB database."""
 
     try:
         client.admin.command("ping")
@@ -145,25 +145,9 @@ def test_connection(client: MongoClient) -> None:
         raise e
 
 
-def check_valid_db(db_name: str, client: MongoClient) -> bool:
-    """Check if a database exists. If it does not, raise an error.
-
-    Args:
-        db_name: Name of the database to check.
-        client: MongoClient object.
-
-    Returns:
-        True if the database exists.
-    """
-
-    db_list = client.list_database_names()
-    if db_name not in db_list:
-        raise ValueError(f"Database {db_name} does not exist.")
-    client.close()
-    return True
-
-
-def check_valid_collection(collection_name: str, db_name: str, client: MongoClient) -> bool:
+def check_valid_collection(
+    collection_name: str, db_name: str, client: MongoClient
+) -> bool:
     """Check if a collection exists in a database. If it does not, raise an error.
 
     Args:
@@ -177,7 +161,9 @@ def check_valid_collection(collection_name: str, db_name: str, client: MongoClie
 
     collection_list = client[db_name].list_collection_names()
     if collection_name not in collection_list:
-        raise ValueError(f"Collection {collection_name} does not exist in database {db_name}.")
+        raise ValueError(
+            f"Collection {collection_name} does not exist in database {db_name}."
+        )
     client.close()
     return True
 
@@ -185,7 +171,7 @@ def check_valid_collection(collection_name: str, db_name: str, client: MongoClie
 class AuthenticatedCursor:
     """An authenticated cursor to a MongoDB database.
 
-    This wrapper class for pymongo.MongoClient provides authentificaton to connect to a MongoDB
+    This wrapper class for pymongo.MongoClient provides authentication to connect to a MongoDB
     database. It can be used as a context manager to automatically connect and close the
     connection to the database. It can also be used as a regular class to connect and close
     the connection manually. You can access the pymongo.MongoClient object using the `client`
@@ -202,24 +188,49 @@ class AuthenticatedCursor:
             read from config.ini file.
     """
 
-    def __init__(self, username: str = None, password: str = None, cluster: str = None,
-                 db_name: str = None, collection_name: str = None):
+    def __init__(
+        self,
+        username: str = None,
+        password: str = None,
+        cluster: str = None,
+        db_name: str = None,
+        collection_name: str = None,
+    ):
         """Initialize the AuthenticatedCursor object."""
 
         credentials = _check_credentials(username, password, cluster)
         self.__uri = _create_uri(**credentials)
 
         # test connection to the cluster
-        test_connection(MongoClient(self.__uri))
+        check_connection(MongoClient(self.__uri))
         self._client = None  # client object
 
         self._db_name = None
+
         if db_name is not None:
             self.set_db(db_name)
 
         self._collection_name = None
         if collection_name is not None:
             self.set_collection(collection_name)
+
+    def check_valid_db(self, db_name: str) -> bool:
+        """Check if a database exists. If it does not, raise an error.
+
+        Args:
+            db_name: Name of the database to check
+            client: MongoClient object.
+
+        Returns:
+            True if the database exists.
+        """
+
+        with MongoClient(self.__uri) as client:
+            db_list = client.list_database_names()
+            if db_name not in db_list:
+                raise ValueError(f"Database {db_name} does not exist.")
+
+            return True
 
     def connect(self):
         """Connect to the MongoDB database."""
@@ -234,7 +245,7 @@ class AuthenticatedCursor:
 
     def __enter__(self):
         """Enter context manager."""
-
+        self.connect()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -254,17 +265,18 @@ class AuthenticatedCursor:
 
     def set_db(self, db_name: str):
         """Set the database to connect to."""
-        check_valid_db(db_name, MongoClient(self.__uri))
+
+        self.check_valid_db(db_name=db_name)
         self._db_name = db_name
 
     @property
-    def db(self) -> Database:
+    def db(self) -> Database | None:
         """MongoDB client object."""
 
         if self._db_name is None:
-            raise ValueError("Database not set. Use set_db() to set the database.")
+            return
         if self._client is None:
-            raise ValueError("Client not connected. Use connect() to connect to the database.")
+            return
         return self._client[self._db_name]
 
     def set_collection(self, collection_name: str) -> None:
@@ -277,53 +289,36 @@ class AuthenticatedCursor:
         self._collection_name = collection_name
 
     @property
-    def collection(self) -> Collection:
+    def collection(self) -> Collection | None:
         """ """
-
         if self._collection_name is None:
-            raise ValueError("Collection not set. Use set_collection() to set the collection.")
+            return
         if self._client is None:
-            raise ValueError("Client not connected. Use connect() to connect to the database.")
+            return
         return self.db[self._collection_name]
-
-
 
 
 class PolicyReader:
     """Class to read data from a MongoDB database."""
 
-    def __init__(self, cursor: AuthenticatedCursor, db_name: str = None):
+    def __init__(self, cursor: AuthenticatedCursor):
         """Initialize the PolicyReader object."""
+        self.cursor = cursor
 
-        self._cursor = cursor
+    def get_df(self, query: dict | None = None) -> pd.DataFrame:
+        """Get collection as a pandas DataFrame.
 
-        if db_name is not None:
-            check_valid_db(db_name, cursor)
-            self._db_name = db_name
+        Args:
+            query: Query to filter the collection.
 
-        else:
-            self._db_name = None
+        Returns:
+            A pandas DataFrame with the collection data.
+        """
+        if query is None:
+            query = {}
 
-    def set_db(self, db_name: str):
-        """Set the database to read from."""
-
-        check_valid_db(db_name, self._cursor)
-        self._db_name = db_name
-
-    @property
-    def db_name(self):
-        """Name of the database to read from."""
-        if self._db_name is None:
-            raise ValueError("No database set. Use set_db() to set the database.")
-        return self._db_name
-
-    def list_databases(self):
-        """return a list of available databases"""
-
-        with self._cursor as cursor:
-            cursor.connect()
-            return cursor.client.list_database_names()
-
+        with self.cursor as cursor:
+            return pd.DataFrame(cursor.collection.find(query))
 
 
 class PolicyWriter:

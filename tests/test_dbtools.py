@@ -216,7 +216,7 @@ def test_test_connection_successful():
     client.admin = admin
 
     # Call the test function
-    dbtools.test_connection(client)
+    dbtools.check_connection(client)
 
     # Assert that the MongoClient's `admin.command` method was called with "ping"
     admin.command.assert_called_once_with("ping")
@@ -237,7 +237,7 @@ def test_test_connection_failed():
 
     # Call the test function and expect it to raise a ConnectionFailure exception
     with pytest.raises(ConnectionFailure):
-        dbtools.test_connection(client)
+        dbtools.check_connection(client)
 
     # Assert that the MongoClient's `admin.command` method was called with "ping"
     client.admin.command.assert_called_once_with("ping")
@@ -255,7 +255,7 @@ def test_test_connection_other_failed():
 
     # Call the test function and expect it to raise a ConnectionFailure exception
     with pytest.raises(Exception):
-        dbtools.test_connection(client)
+        dbtools.check_connection(client)
 
     # Assert that the MongoClient's `admin.command` method was called with "ping"
     client.admin.command.assert_called_once_with("ping")

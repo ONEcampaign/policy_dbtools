@@ -285,18 +285,18 @@ def test_test_connection_other_failed():
     client.admin.command.assert_called_once_with("ping")
 
 
-def test_check_valid_db():
-    """Test check_valid_db function"""
-
-    # Create a Mock MongoClient
-    client = Mock(spec=MongoClient)
-    client.list_database_names.return_value = ["test_db"]
-    #
-    # assert client.check_valid_db("test_db", client)
-    #
-    # # check error
-    # with pytest.raises(ValueError):
-    #     client.check_valid_db("test_db_2", client)
+# def test_check_valid_db():
+#     """Test check_valid_db function"""
+#
+#     # Create a Mock MongoClient
+#     client = Mock(spec=MongoClient)
+#     client.list_database_names.return_value = ["test_db"]
+#     #
+#     # assert client.check_valid_db("test_db", client)
+#     #
+#     # # check error
+#     # with pytest.raises(ValueError):
+#     #     client.check_valid_db("test_db_2", client)
 
 
 class TestCheckValidCollection:
@@ -464,7 +464,7 @@ class TestAuthenticatedCursor:
     def test_set_db(self, mock_mongo_client):
         """Test setting the database name"""
 
-        self.mock_client(mock_mongo_client)
+        # self.mock_client(mock_mongo_client)
 
         cursor = dbtools.AuthenticatedCursor(
             username="test_user", password="test_password", cluster="test_cluster"
@@ -488,6 +488,25 @@ class TestAuthenticatedCursor:
         cursor.set_db("test_db")
         assert cursor.db == mock_mongo_client["test_db"]
         assert isinstance(cursor.db, Database)
+
+    @patch("policy_dbtools.dbtools.MongoClient")
+    def test_check_valid_db (self, mock_mongo_client):
+        """Test the check_valid_db method"""
+
+        mock_mongo_client.return_value = self.mock_client(mock_mongo_client)
+
+        cursor = dbtools.AuthenticatedCursor(
+            username="test_user", password="test_password", cluster="test_cluster"
+        )
+
+        assert cursor.check_valid_db("test_db") is True
+
+        # check error
+        with pytest.raises(ValueError):
+            cursor.check_valid_db("test_db_invalid")
+
+
+
 
     @patch("policy_dbtools.dbtools.MongoClient")
     def test_set_collection(self, mock_mongo_client):

@@ -219,7 +219,7 @@ class AuthenticatedCursor:
 
         Args:
             db_name: Name of the database to check
-            client: MongoClient object.
+
 
         Returns:
             True if the database exists.
@@ -307,7 +307,10 @@ class PolicyReader:
 
         # database have been set
         if self.cursor._db_name is None:
-            raise ValueError("Database not set. Use set_db() on the Authenticaded cursor object to set the database.")
+            raise ValueError(
+                "Database not set. Use set_db() on the Authenticated cursor object"
+                " to set the database."
+            )
 
     def get_df(self, query: dict | None = None) -> pd.DataFrame:
         """Get collection as a pandas DataFrame.
@@ -329,4 +332,3 @@ class PolicyWriter:
     """Class to write data from a MongoDB database."""
 
     pass
-

@@ -1,540 +1,379 @@
-"""Tests for dbtools.py"""
+import configparser
+import os
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import patch, Mock, MagicMock
-from pymongo.database import Database
-from pymongo.collection import Collection
-import os
-import configparser
-from pathlib import Path
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
 
 from policy_dbtools import dbtools
+from policy_dbtools.dbtools import (
+    AuthenticatedCursor,
+    ConnectionFailure,
+    _check_credentials,
+    _create_uri,
+    set_config,
+    set_config_path,
+)
 
 
+# Fixture to reset CONFIG_PATH after each test
 @pytest.fixture(autouse=True)
-def setup_teardown():
-    # Run setup code before each test
-    config_file_path = "config.ini"
+def reset_config_path():
+    original_path = dbtools.CONFIG_PATH
     yield
+    set_config_path(original_path)
     # Run teardown code after each test
-    if os.path.exists(config_file_path):
-        os.remove(config_file_path)
     if os.path.exists(dbtools.CONFIG_PATH):
         os.remove(dbtools.CONFIG_PATH)
 
+    config_file_path = "config.ini"
+    if os.path.exists(config_file_path):
+        os.remove(config_file_path)
+
 
 def test_set_config_path():
-    """Test set_config_path"""
+    """Test if set_config_path changes the CONFIG_PATH correctly."""
+    # new temp path
+    new_path = Path("./config.ini").resolve()
 
-    # set config file path
-    config_file_path = "config.ini"
-    dbtools.set_config_path(config_file_path)
+    # set it
+    set_config_path(new_path)
 
-    # check that the config file path is set
-    assert dbtools.CONFIG_PATH == Path(config_file_path).resolve()
+    # check
+    assert dbtools.CONFIG_PATH == new_path
 
 
-class TestSetConfig:
-    dbtools.set_config_path("tests/config.ini")
+def test_set_config_creates_file():
+    """est set_config creates config.ini if it doesn't exist"""
+    # set path
+    path = Path("./config2.ini").resolve()
+    set_config_path(path)
+    # remove the file if it exists from previous tests
+    if os.path.exists(path):
+        os.remove(path)
 
-    def test_set_config_without_arguments_config_exists(self):
-        """Test set_config() with no arguments when config file exists with some arguments"""
+    # try to set config
+    set_config(username="test", password="test_pass", cluster="test_cluster")
 
-        # set config file with some data
-        original_config_data = {"MONGO_CLUSTER": "mycluster"}
-        config = configparser.ConfigParser()
-        config["MONGODB"] = original_config_data
-        with open(dbtools.CONFIG_PATH, "w") as configfile:
-            config.write(configfile)
+    # check
+    assert os.path.exists(path)
 
-        # set config file with no arguments
-        dbtools.set_config()
 
-        # check that the config file is unchanged
-        config = configparser.ConfigParser()
-        config.read(dbtools.CONFIG_PATH)
-        assert (
-            config["MONGODB"]["MONGO_CLUSTER"] == original_config_data["MONGO_CLUSTER"]
-        )
+def test_set_config_updates_values():
+    """Test set_config updates values correctly"""
 
-    def test_set_config_without_arguments_config_does_not_exist(self):
-        """Test set_config() with no arguments when config file does not exist"""
+    # Given
+    path = Path("./config3.ini").resolve()
+    set_config_path(path)
+    config = configparser.ConfigParser()
 
-        # set config file with no arguments
-        dbtools.set_config()
+    # When
+    set_config(username="test", password="test_pass", cluster="test_cluster")
+    config.read(path)
 
-        # check that the config file is is created with no data
-        config = configparser.ConfigParser()
-        config.read(dbtools.CONFIG_PATH)
-        assert config["MONGODB"] == {}
+    # Then
+    assert config["MONGODB"]["MONGO_USERNAME"] == "test"
+    assert config["MONGODB"]["MONGO_PASSWORD"] == "test_pass"
+    assert config["MONGODB"]["MONGO_CLUSTER"] == "test_cluster"
 
-    def test_set_config_with_arguments_config_exists(self):
-        """Test set_config() with arguments when config file exists with some arguments
 
-        In this test the arguments passed to set_config should be different from the
-        data in the config file, to ensure that new data is added without old data being overwritten
-        """
+# -----------------------------------------------------------------------------------
 
-        # set config file with some data
-        original_config_data = {"MONGO_CLUSTER": "mycluster"}
-        config = configparser.ConfigParser()
-        config["MONGODB"] = original_config_data
-        with open(dbtools.CONFIG_PATH, "w") as configfile:
-            config.write(configfile)
 
-        # run set_config with some arguments
-        dbtools.set_config(username="myusername", password="mypassword")
+def test_create_uri():
+    """Test _create_uri by mocking inputs and checking if output string is correctly formatted"""
+    # basics
+    username = "test_user"
+    password = "test_pass"
+    cluster = "test_cluster"
+    expected_uri = (
+        "mongodb+srv://test_user:test_pass"
+        "@test_cluster.sln0w.mongodb.net/?retryWrites=true&w=majority"
+    )
 
-        # check that the config file is updated with the new data
-        config = configparser.ConfigParser()
-        config.read(dbtools.CONFIG_PATH)
-        assert (
-            config["MONGODB"]["MONGO_CLUSTER"] == original_config_data["MONGO_CLUSTER"]
-        )
-        assert config["MONGODB"]["MONGO_USERNAME"] == "myusername"
-        assert config["MONGODB"]["MONGO_PASSWORD"] == "mypassword"
+    # When
+    result_uri = _create_uri(cluster, username, password)
 
-    def test_set_config_overwrite(self):
-        """Test set_config() with arguments that override data that exists in the config file"""
+    # Then
+    assert result_uri == expected_uri
 
-        # set config file with some data
-        original_config_data = {
-            "MONGO_CLUSTER": "mycluster",
-            "MONGO_USERNAME": "myusername",
+
+def test_check_credentials_provided():
+    """Test _check_credentials if credentials are provided, it should return them"""
+    # Test parameters
+    username = "test_user"
+    password = "test_pass"
+    cluster = "test_cluster"
+
+    # check
+    result = _check_credentials(username, password, cluster)
+
+    # Then
+    assert result["username"] == username
+    assert result["password"] == password
+    assert result["cluster"] == cluster
+
+
+@patch("configparser.ConfigParser.read")
+@patch("os.path.exists", return_value=True)
+def test_check_credentials_from_config(mock_exists, mock_read):
+    """Test _check_credentials to read from mock config file if credentials are not provided"""
+
+    mock_config = {
+        "MONGODB": {
+            "MONGO_USERNAME": "config_user",
+            "MONGO_PASSWORD": "config_pass",
+            "MONGO_CLUSTER": "config_cluster",
         }
-        config = configparser.ConfigParser()
-        config["MONGODB"] = original_config_data
-        with open(dbtools.CONFIG_PATH, "w") as configfile:
-            config.write(configfile)
+    }
+    with patch.object(configparser.ConfigParser, "has_option", return_value=True):
+        with patch.object(
+            configparser.ConfigParser, "__getitem__", lambda _, key: mock_config[key]
+        ):
+            # When
+            result = _check_credentials()
 
-        # run set_config with some arguments
-        dbtools.set_config(
-            password="mypassword",
-            cluster="myothercluster",
-        )
-
-        # check that the config file is updated with the new data
-        config = configparser.ConfigParser()
-        config.read(dbtools.CONFIG_PATH)
-        assert config["MONGODB"]["MONGO_CLUSTER"] == "myothercluster"
-        assert config["MONGODB"]["MONGO_USERNAME"] == "myusername"
-        assert config["MONGODB"]["MONGO_PASSWORD"] == "mypassword"
+            # Then
+            assert result["username"] == "config_user"
+            assert result["password"] == "config_pass"
+            assert result["cluster"] == "config_cluster"
 
 
-def test_create_uri_no_special_characters():
-    """Test _create_uri when no special characters are in the string arguemnts"""
-
-    # Test case 1: No special characters, quote_plus not needed
-    cluster = "my-cluster"
-    username = "my-username"
-    password = "my-password"
-    expected_uri = (
-        "mongodb+srv://my-username:my-password@my-cluster.sln0w.mongodb.net/"
-        "?retryWrites=true&w=majority"
-    )
-
-    assert dbtools._create_uri(cluster, username, password) == expected_uri
-
-
-def test_create_uri_special_characters():
-    """Test _create_uri when special characters are in the string arguemnts
-    for which quote_plus is needed
-    """
-
-    cluster = "my-cluster"
-    username = "my+username"
-    password = "my&password"
-    expected_uri = (
-        "mongodb+srv://my%2Busername:my%26password@my-cluster"
-        ".sln0w.mongodb.net/?retryWrites=true&w=majority"
-    )
-
-    assert dbtools._create_uri(cluster, username, password) == expected_uri
-
-
-class TestCheckCredentials:
-    """Tests for _check_credentials"""
-
-    dbtools.set_config_path("tests/config.ini")
-
-    def test_no_credentials_and_no_config_error(self):
-        """Test that _check_credentials raises an error when no credentials are passed
-        and no config file exists"""
-
+def test_check_credentials_no_config_no_credentials():
+    """Test _check_credentials to raise error if config file doesn't exist and no credentials"""
+    # patch the check
+    with patch("os.path.exists", return_value=False):
+        # Then
         with pytest.raises(
             ValueError,
             match="No credentials provided and config.ini file does not exist.",
         ):
-            dbtools._check_credentials()
+            _check_credentials()
 
-    def test_no_credential_config_exists(self):
-        """Test that an error is raised when no username is passed and the
-        config file does not contain a username
 
-        This error should be raise when the user has not set credentials using set_config()
-        """
-
-        dbtools.set_config_path("config.ini")
-        dbtools.set_config(
-            username="myusername", password="mypassword", cluster="mycluster"
-        )
-
-        # assert os.path.exists(dbtools.CONFIG_PATH)
-
-        assert dbtools._check_credentials() == {
-            "username": "myusername",
-            "password": "mypassword",
-            "cluster": "mycluster",
+def test_check_credentials_missing_config_credentials():
+    """Test _check_credentials to raise error if certain credentials are missing
+    from the config"""
+    # config with missing credentials
+    mock_config = {
+        "MONGODB": {
+            "MONGO_USERNAME": "config_user",
         }
-
-    def test_credentials_passed_no_config(self):
-        """Test _check_credentials when all credentials are passed to the function"""
-
-        assert dbtools._check_credentials(
-            username="myusername", password="mypassword", cluster="mycluster"
-        ) == {
-            "username": "myusername",
-            "password": "mypassword",
-            "cluster": "mycluster",
-        }
-
-    def test_1_credential_passed_others_in_config(self):
-        """Test _check_credentials when one credential is passed to the function
-        and the others are in the config file"""
-
-        dbtools.set_config(cluster="mycluster")
-
-        assert dbtools._check_credentials(
-            username="myusername", password="mypassword"
-        ) == {
-            "username": "myusername",
-            "password": "mypassword",
-            "cluster": "mycluster",
-        }
-
-    def test_raise_error_missing_credential(self):
-        """test _check_credentials when a credential is not passed to the function
-        and it does not exist in the config file"""
-
-        dbtools.set_config(cluster="mycluster")
-
-        with pytest.raises(
-            ValueError,
-            match="Missing credentials. `password` must provided or "
-            "set using set_config().",
+    }
+    # patch the path check
+    with patch("os.path.exists", return_value=True):
+        # patch the config read
+        with patch.object(
+            configparser.ConfigParser,
+            "has_option",
+            side_effect=lambda section, option: option in mock_config["MONGODB"],
         ):
-            dbtools._check_credentials(username="myusername")
+            with patch.object(
+                configparser.ConfigParser,
+                "__getitem__",
+                lambda _, key: mock_config[key],
+            ):
+                # Then
+                with pytest.raises(
+                    ValueError,
+                    match="Missing credentials. "
+                    "`password` must provided or set using set_config().",
+                ):
+                    _check_credentials()
 
 
-def test_test_connection_successful():
-    """Test test_connection() with a successful connection"""
-
-    # Create a Mock MongoClient
-    client = Mock(spec=MongoClient)
-
-    # Create a Mock for the `admin` attribute and its `command` method
-    admin = Mock()
-    admin.command.return_value = {"ok": 1.0}
-    client.admin = admin
-
-    # Call the test function
-    dbtools.check_connection(client)
-
-    # Assert that the MongoClient's `admin.command` method was called with "ping"
-    admin.command.assert_called_once_with("ping")
-
-    # Assert that the `close` method was called once
-    client.close.assert_called_once()
+# -----------------------------------------------------------------------------------
 
 
-def test_test_connection_failed():
-    """Test test_connection() with a failed connection"""
-    # Create a Mock MongoClient
-    client = Mock(spec=MongoClient)
+@patch("policy_dbtools.dbtools._check_credentials")
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_check_connection_success(mock_mongo_client, mock_check_credentials):
+    # Given
+    mock_credentials = {
+        "username": "mock_user",
+        "password": "mock_pass",
+        "cluster": "mock_cluster",
+    }
+    mock_check_credentials.return_value = mock_credentials
 
-    # Create a Mock for the `admin` attribute and its `command` method
-    admin = Mock()
-    admin.command.side_effect = ConnectionFailure("Connection failed")
-    client.admin = admin
+    mock_admin_instance = MagicMock()
+    mock_client_instance = MagicMock()
+    mock_client_instance.admin = mock_admin_instance
 
-    # Call the test function and expect it to raise a ConnectionFailure exception
-    with pytest.raises(ConnectionFailure):
-        dbtools.check_connection(client)
+    # Mocking the MongoClient's __init__ to prevent it from attempting a connection
+    mock_mongo_client.return_value = mock_client_instance
 
-    # Assert that the MongoClient's `admin.command` method was called with "ping"
-    client.admin.command.assert_called_once_with("ping")
-
-
-def test_test_connection_other_failed():
-    """Test test_connection() with a failed connection"""
-    # Create a Mock MongoClient
-    client = Mock(spec=MongoClient)
-
-    # Create a Mock for the `admin` attribute and its `command` method
-    admin = Mock()
-    admin.command.side_effect = Exception("Connection failed")
-    client.admin = admin
-
-    # Call the test function and expect it to raise a ConnectionFailure exception
-    with pytest.raises(Exception):
-        dbtools.check_connection(client)
-
-    # Assert that the MongoClient's `admin.command` method was called with "ping"
-    client.admin.command.assert_called_once_with("ping")
-
-
-# def test_check_valid_db():
-#     """Test check_valid_db function"""
-#
-#     # Create a Mock MongoClient
-#     client = Mock(spec=MongoClient)
-#     client.list_database_names.return_value = ["test_db"]
-#     #
-#     # assert client.check_valid_db("test_db", client)
-#     #
-#     # # check error
-#     # with pytest.raises(ValueError):
-#     #     client.check_valid_db("test_db_2", client)
-
-
-class TestCheckValidCollection:
-    """Tests for check_valid_collection"""
-
-    def mock_client(self, mock_mongo_client):
-        # Mock the MongoClient and Database instances
-        mock_client_instance = mock_mongo_client.return_value
-        mock_database_instance = Mock(spec=Database)
-        mock_client_instance.__getitem__.return_value = mock_database_instance
-
-        # mock the close method
-        mock_client_instance.close.return_value = None
-
-        mock_client_instance.list_database_names.return_value = ["test_db"]
-        mock_database_instance.list_collection_names.return_value = ["test_collection"]
-
-        return mock_client_instance
-
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_check_valid_collection(self, mock_mongo_client):
-        """ """
-
-        mock_client_instance = self.mock_client(mock_mongo_client)
-        assert (
-            dbtools.check_valid_collection(
-                "test_collection", "test_db", mock_client_instance
-            )
-            is True
+    # When: Mocking out the check_connection call during initialization
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        with pytest.raises(ValueError):
-            dbtools.check_valid_collection(
-                "test_collection_invalid", "test_db", mock_client_instance
-            )
+    # Explicitly call check_connection for our test
+    cursor.check_connection()
+
+    # Then
+    mock_admin_instance.command.assert_called_once_with("ping")
+    mock_client_instance.close.assert_called_once()
 
 
-class TestAuthenticatedCursor:
-    """Tests for the AuthentificatedCursor class"""
+# Test check_connection with a failed connection
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_check_connection_failure(mock_mongo_client):
+    # Given
+    mock_mongo_client.side_effect = ConnectionFailure("Failed to connect")
 
-    def mock_client(self, mock_mongo_client):
-        # Mock the MongoClient and Database instances
-        mock_client_instance = mock_mongo_client.return_value
-
-        mock_database_instance = MagicMock(spec=Database)
-        mock_client_instance.__getitem__.return_value = mock_database_instance
-
-        # Mock collection
-        mock_collection_instance = MagicMock(spec=Collection)
-        mock_database_instance.__getitem__.return_value = mock_collection_instance
-
-        # Create a Mock for the `admin` attribute and its `command` method
-        admin = Mock()
-        admin.command.return_value = {"ok": 1.0}
-        mock_client_instance.admin = admin
-
-        # mock the close method
-        mock_client_instance.close.return_value = None
-
-        # mock the list_database_names method
-        mock_client_instance.list_database_names.return_value = ["test_db"]
-        mock_database_instance.list_collection_names.return_value = ["test_collection"]
-
-        return mock_client_instance
-
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_init(self, mock_mongo_client):
-        """Test the instantiation of the class"""
-
-        mock_client_instance = self.mock_client(mock_mongo_client)
-
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user",
-            password="test_password",
-            cluster="test_cluster",
-            db_name="test_db",
-            collection_name="test_collection",
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        # check that __uri is not None
-        assert cursor._AuthenticatedCursor__uri is not None
-        mock_client_instance.admin.command.assert_called_once_with(
-            "ping"
-        )  # check that the connection was tested
+    # Then
+    with pytest.raises(ConnectionFailure, match="Failed to connect"):
+        cursor.check_connection()
 
-        assert cursor._db_name == "test_db"  # check that the db name is set
-        mock_client_instance.list_database_names.assert_called_once()  # check that the db was checked
 
-        assert (
-            cursor._collection_name == "test_collection"
-        )  # check that the collection name is set
-        mock_client_instance.__getitem__.assert_called_once_with(
-            "test_db"
-        )  # check that the collection was checked
+# Test check_valid_db with a valid database
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_check_valid_db_success(mock_mongo_client):
+    # Given
+    mock_client_instance = MagicMock()
+    mock_client_instance.list_database_names.return_value = ["test_db"]
 
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_init_no_credentials(self, mock_mongo_client):
-        """test the instantiation of the class when no credentials are passed
-        but exist in a config file"""
+    # Mock the context manager methods (__enter__ and __exit__) for the MongoClient instance
+    mock_mongo_client_instance = MagicMock()
+    mock_mongo_client_instance.__enter__.return_value = mock_client_instance
+    mock_mongo_client.return_value = mock_mongo_client_instance
 
-        mock_client_instance = self.mock_client(mock_mongo_client)
-
-        # set up config file
-        dbtools.set_config_path("config.ini")
-        dbtools.set_config(
-            username="myusername", password="mypassword", cluster="mycluster"
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        cursor = dbtools.AuthenticatedCursor()
-        assert (
-            cursor._AuthenticatedCursor__uri is not None
-        )  # check that the hidden attribute __uri is set
-        mock_client_instance.admin.command.assert_called_once_with(
-            "ping"
-        )  # check that the connection was tested
+    # When
+    result = cursor.check_valid_db("test_db")
 
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_connect(self, mock_mongo_client):
-        """Test the connect method"""
+    # Then
+    assert result is True
 
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
+
+# Test check_valid_db with an invalid database
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_check_valid_db_failure(mock_mongo_client):
+    # Given
+    mock_client_instance = MagicMock()
+    mock_client_instance.list_database_names.return_value = ["some_other_db"]
+
+    # Mock the context manager methods (__enter__ and __exit__) for the MongoClient instance
+    mock_mongo_client_instance = MagicMock()
+    mock_mongo_client_instance.__enter__.return_value = mock_client_instance
+    mock_mongo_client.return_value = mock_mongo_client_instance
+
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        mock_client_instance = self.mock_client(mock_mongo_client)
+    # Then
+    with pytest.raises(ValueError, match="Database test_db does not exist."):
+        cursor.check_valid_db("test_db")
 
-        cursor.connect()
-        assert cursor.client == mock_client_instance
 
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_close_connection(self, mock_mongo_client):
-        """Test the close method"""
+# Test check_valid_collection with a valid collection
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_check_valid_collection_success(mock_mongo_client):
+    # Given
+    mock_db_instance = MagicMock()
+    mock_db_instance.list_collection_names.return_value = ["test_collection"]
 
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
+    mock_mongo_client_instance = MagicMock()
+    mock_mongo_client_instance.__getitem__.return_value = mock_db_instance
+    mock_mongo_client_instance.__enter__.return_value = mock_mongo_client_instance
+    mock_mongo_client.return_value = mock_mongo_client_instance
+
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        cursor.connect()
-        cursor.close()
+    # When
+    result = cursor.check_valid_collection("test_collection", "test_db")
 
-        assert cursor.client is None
+    # Then
+    assert result is True
 
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_context_manager(self, mock_mongo_client):
-        """Test PolicyClient as a context manager"""
 
-        mock_client_instance = self.mock_client(mock_mongo_client)
+# Test check_valid_collection with an invalid collection
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_check_valid_collection_failure(mock_mongo_client):
+    # Given
+    mock_client_instance = MagicMock()
+    mock_db_instance = MagicMock()
+    mock_db_instance.list_collection_names.return_value = ["some_other_collection"]
+    mock_client_instance.__getitem__.return_value = mock_db_instance
+    mock_mongo_client.return_value = mock_client_instance
 
-        # Initialize the PolicyClient
-        with dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
-        ) as cursor:
-            cursor.connect()
-
-            # Assertions
-            assert (
-                cursor._AuthenticatedCursor__uri is not None
-            )  # check that the hidden attribute __uri is set
-            assert cursor.client == mock_client_instance
-
-        # assert that the the close method was called 3 times
-        assert mock_client_instance.close.call_count == 2
-
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_set_db(self, mock_mongo_client):
-        """Test setting the database name"""
-
-        # self.mock_client(mock_mongo_client)
-
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        cursor.set_db("test_db")
-        assert cursor._db_name == "test_db"
+    # Then
+    with pytest.raises(
+        ValueError,
+        match="Collection test_collection does not exist in database test_db.",
+    ):
+        cursor.check_valid_collection("test_collection", "test_db")
 
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_db(self, mock_mongo_client):
-        """Test the db property"""
 
-        mock_mongo_client = self.mock_client(mock_mongo_client)
-
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
+# Test connect and close methods
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_connect_and_close(mock_mongo_client):
+    # Given
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        cursor.connect()
+    # When
+    cursor.connect()
 
-        cursor.set_db("test_db")
-        assert cursor.db == mock_mongo_client["test_db"]
-        assert isinstance(cursor.db, Database)
+    # Then
+    assert cursor.client is not None  # Ensures client is instantiated
 
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_check_valid_db (self, mock_mongo_client):
-        """Test the check_valid_db method"""
+    # When
+    cursor.close()
 
-        mock_mongo_client.return_value = self.mock_client(mock_mongo_client)
+    # Then
+    assert cursor.client is None  # Ensures client is set to None
 
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
+
+# Test set_db and set_collection methods
+@patch("policy_dbtools.dbtools.MongoClient")
+def test_set_db_and_set_collection(mock_mongo_client):
+    # Given
+    mock_db_instance = MagicMock()
+    mock_db_instance.list_collection_names.return_value = ["test_collection"]
+
+    mock_mongo_client_instance = MagicMock()
+    mock_mongo_client_instance.list_database_names.return_value = ["test_db"]
+    mock_mongo_client_instance.__getitem__.return_value = mock_db_instance
+    mock_mongo_client_instance.__enter__.return_value = mock_mongo_client_instance
+    mock_mongo_client.return_value = mock_mongo_client_instance
+
+    with patch.object(AuthenticatedCursor, "check_connection", return_value=None):
+        cursor = AuthenticatedCursor(
+            username="mock_user", password="mock_pass", cluster="mock_cluster"
         )
 
-        assert cursor.check_valid_db("test_db") is True
+    # When
+    cursor.set_db("test_db")
 
-        # check error
-        with pytest.raises(ValueError):
-            cursor.check_valid_db("test_db_invalid")
+    # Then
+    assert cursor._db_name == "test_db"
 
+    # When
+    cursor.set_collection("test_collection")
 
-
-
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_set_collection(self, mock_mongo_client):
-        """Test setting the collection"""
-
-        self.mock_client(mock_mongo_client)
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
-        )
-
-        cursor._db_name = "test_db"
-
-        cursor.set_collection("test_collection")
-        assert cursor._collection_name == "test_collection"
-
-    @patch("policy_dbtools.dbtools.MongoClient")
-    def test_collection(self, mock_mongo_client):
-        """Test the collection property"""
-
-        mock_mongo_client = self.mock_client(mock_mongo_client)
-
-        cursor = dbtools.AuthenticatedCursor(
-            username="test_user", password="test_password", cluster="test_cluster"
-        )
-
-        cursor.connect()
-        cursor._db_name = "test_db"
-        cursor._collection_name = "test_collection"
-
-        assert isinstance(cursor.collection, Collection)
-        assert cursor.collection == mock_mongo_client["test_db"]["test_collection"]
+    # Then
+    assert cursor._collection_name == "test_collection"

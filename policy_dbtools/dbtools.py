@@ -1,4 +1,13 @@
-"""Tools to handle connection to a MongoDB database."""
+"""Tools to handle connection and CRUD operations to a MongoDB database.
+
+main functions and classes:
+    set_config_path - set the path to the config.ini file
+    set_config - set the configuration file for MongoDB connection
+    AuthenticatedCursor - an authenticated cursor to a MongoDB database
+    MongoWriter - a class to write data to a MongoDB database
+    MongoReader - a class to read data from a MongoDB database
+"""
+
 import pandas as pd
 import pymongo
 from pymongo import MongoClient
@@ -16,7 +25,11 @@ CONFIG_PATH = Path(__file__).parent / "config.ini"
 
 
 def set_config_path(path: str) -> None:
-    """Set the path to the config.ini file."""
+    """Set the path to the config.ini file.
+
+    Args:
+        path: Path to the config.ini file.
+    """
 
     global CONFIG_PATH
     CONFIG_PATH = Path(path).resolve()
@@ -30,9 +43,9 @@ def set_config(username: str = None, password: str = None, cluster: str = None) 
     config.ini file.
 
     Args:
-        username (str): Username to authenticate with.
-        password (str): Password to authenticate with.
-        cluster (str): Name of the MongoDB cluster to connect to.
+        username: Username to authenticate with.
+        password: Password to authenticate with.
+        cluster: Name of the MongoDB cluster to connect to.
     """
 
     config = configparser.ConfigParser()
@@ -61,12 +74,12 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
     """Create a MongoDB connection string.
 
     Args:
-        cluster (str): Name of the MongoDB cluster to connect to.
-        username (str): Username to authenticate with.
-        password (str): Password to authenticate with.
+        cluster: Name of the MongoDB cluster to connect to.
+        username: Username to authenticate with.
+        password: Password to authenticate with.
 
     Returns:
-        str: MongoDB connection string.
+        MongoDB connection string.
     """
 
     return (
@@ -76,7 +89,7 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
 
 
 def _check_credentials(
-        username: str = None, password: str = None, cluster: str = None
+    username: str = None, password: str = None, cluster: str = None
 ) -> dict:
     """Checks credentials required for MongoDB connection.
 
@@ -84,9 +97,9 @@ def _check_credentials(
     If the credentials are not provided in the configuration file, an error will be raised.
 
     Args:
-        username (str): Username to authenticate with.
-        password (str): Password to authenticate with.
-        cluster (str): Name of the MongoDB cluster to connect to.
+        username: Username to authenticate with.
+        password: Password to authenticate with.
+        cluster: Name of the MongoDB cluster to connect to.
 
     Returns:
         Dictionary containing the username, password, and cluster name.
@@ -157,12 +170,12 @@ class AuthenticatedCursor:
     """
 
     def __init__(
-            self,
-            username: str = None,
-            password: str = None,
-            cluster: str = None,
-            db_name: str = None,
-            collection_name: str = None,
+        self,
+        username: str = None,
+        password: str = None,
+        cluster: str = None,
+        db_name: str = None,
+        collection_name: str = None,
     ):
         """Initialize the AuthenticatedCursor object."""
 
@@ -264,8 +277,12 @@ class AuthenticatedCursor:
         """MongoDB client object."""
         return self._client
 
-    def set_db(self, db_name: str):
-        """Set the database to connect to."""
+    def set_db(self, db_name: str) -> None:
+        """Set the database to connect to.
+
+        Args:
+            db_name: Name of the database to connect to.
+        """
 
         self.check_valid_db(db_name=db_name)
         self._db_name = db_name
@@ -281,7 +298,11 @@ class AuthenticatedCursor:
         return self._client[self._db_name]
 
     def set_collection(self, collection_name: str) -> None:
-        """Set the collection to connect to."""
+        """Set the collection to connect to.
+
+        Args:
+            collection_name: Name of the collection to connect to.
+        """
 
         if self._db_name is None:
             raise ValueError("Database not set. Use set_db() to set the database.")
@@ -315,12 +336,19 @@ class MongoReader:
 
     """
 
-    def __init__(self, cursor: AuthenticatedCursor, exclude_id: bool = True):
+    def __init__(self, cursor: AuthenticatedCursor, include_id: bool = False):
         """Initialize the PolicyReader object."""
         self.cursor = cursor
-        self.exclude_id = exclude_id
+        self.include_id = include_id
 
-    def _find(self, cursor: AuthenticatedCursor, query: dict | None = None, fields: list | None = None, *args, **kwargs):
+    def _find(
+        self,
+        cursor: AuthenticatedCursor,
+        query: dict | None = None,
+        fields: list | None = None,
+        *args,
+        **kwargs,
+    ) -> pymongo.cursor.Cursor:
         """Get collection as a pandas DataFrame.
 
         Args:
@@ -344,12 +372,14 @@ class MongoReader:
             fields = {field: 1 for field in fields}
 
         # if exclude_id is True and _id is not in fields, set _id to 0
-        if self.exclude_id and "_id" not in fields:
+        if self.include_id is False and "_id" not in fields:
             fields["_id"] = 0
 
         return cursor.collection.find(query, fields, *args, **kwargs)
 
-    def get_data(self, query: dict | None = None, fields: list | None = None, *args, **kwargs) -> list[dict]:
+    def get_data(
+        self, query: dict | None = None, fields: list | None = None, *args, **kwargs
+    ) -> list[dict]:
         """Get the collection data as a list of dictionaries.
 
         Args:
@@ -373,7 +403,9 @@ class MongoReader:
 
             return data
 
-    def get_df(self, query: dict | None = None, fields: list | None = None, *args, **kwargs):
+    def get_df(
+        self, query: dict | None = None, fields: list | None = None, *args, **kwargs
+    ) -> pd.DataFrame:
         """Get collection data as a pandas DataFrame.
 
         Args:
@@ -416,8 +448,8 @@ class MongoWriter:
         self.cursor = cursor
 
     def drop_all_and_insert(
-            self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False
-            ) -> None:
+        self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False
+    ) -> None:
         """Replace all the data in a collection
 
         This function will replace all the data in a collection with the data provided.
@@ -437,17 +469,18 @@ class MongoWriter:
             cursor.db.create_collection(cursor.collection.name)
 
             try:
-
                 # if data is a pandas DataFrame, convert it to a list of dictionaries
                 if isinstance(data, pd.DataFrame):
                     data = data.to_dict(orient="records")
 
-                bulk_operations = [pymongo.DeleteMany({}),
-                                   *[pymongo.InsertOne(document) for document in data]
-                                   ]
+                bulk_operations = [
+                    pymongo.DeleteMany({}),
+                    *[pymongo.InsertOne(document) for document in data],
+                ]
                 result = cursor.collection.bulk_write(bulk_operations)
                 logger.info(
-                    f"Dropped data and inserted {result.inserted_count} documents in collection {cursor.collection.name}")
+                    f"Dropped data and inserted {result.inserted_count} documents in collection {cursor.collection.name}"
+                )
 
                 # if preserve_backup is True, do not delete it after a successful insert
                 if preserve_backup is False:
@@ -459,7 +492,9 @@ class MongoWriter:
                 cursor.db.drop_collection(f"{cursor.collection.name}_backup")
                 raise e
 
-    def insert(self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False) -> None:
+    def insert(
+        self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False
+    ) -> None:
         """Insert data to a collection
 
         This function will insert data to a collection. It will first backup the collection,
@@ -474,9 +509,8 @@ class MongoWriter:
         """
 
         with self.cursor as cursor:
-
             # backup the collection by creating a mirror
-            cursor.collection.aggregate([{'$out': f"{cursor.collection.name}_backup"}])
+            cursor.collection.aggregate([{"$out": f"{cursor.collection.name}_backup"}])
 
             try:
                 # if data is a pandas DataFrame, convert it to a list of dictionaries
@@ -486,16 +520,21 @@ class MongoWriter:
                 bulk_operations = [pymongo.InsertOne(document) for document in data]
                 result = cursor.collection.bulk_write(bulk_operations)
                 logger.info(
-                    f"Inserted {result.inserted_count} documents in collection {cursor.collection.name}")
+                    f"Inserted {result.inserted_count} documents in collection {cursor.collection.name}"
+                )
 
                 # drop the backup collection if the insert was successful
                 if preserve_backup is False:
                     cursor.db.drop_collection(f"{cursor.collection.name}_backup")
 
             except Exception as e:
-                logger.exception(f"Exception occurred. Restoring backup. Exception: {e}")
+                logger.exception(
+                    f"Exception occurred. Restoring backup. Exception: {e}"
+                )
 
                 # restore the backup collection if the insert failed
                 cursor.db.drop_collection(f"{cursor.collection.name}")
-                cursor.db[f"{cursor.collection.name}_backup"].rename(cursor.collection.name)
+                cursor.db[f"{cursor.collection.name}_backup"].rename(
+                    cursor.collection.name
+                )
                 raise e

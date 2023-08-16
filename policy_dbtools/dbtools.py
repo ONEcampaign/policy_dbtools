@@ -1,5 +1,6 @@
 """Tools to handle connection to a MongoDB database."""
 import pandas as pd
+import pymongo
 from pymongo import MongoClient
 from pymongo.database import Database
 from pymongo.collection import Collection
@@ -10,7 +11,6 @@ from pathlib import Path
 from pymongo.errors import ConnectionFailure
 
 from policy_dbtools.config import logger
-
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
 
@@ -76,7 +76,7 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
 
 
 def _check_credentials(
-    username: str = None, password: str = None, cluster: str = None
+        username: str = None, password: str = None, cluster: str = None
 ) -> dict:
     """Checks credentials required for MongoDB connection.
 
@@ -157,12 +157,12 @@ class AuthenticatedCursor:
     """
 
     def __init__(
-        self,
-        username: str = None,
-        password: str = None,
-        cluster: str = None,
-        db_name: str = None,
-        collection_name: str = None,
+            self,
+            username: str = None,
+            password: str = None,
+            cluster: str = None,
+            db_name: str = None,
+            collection_name: str = None,
     ):
         """Initialize the AuthenticatedCursor object."""
 
@@ -298,37 +298,204 @@ class AuthenticatedCursor:
         return self.db[self._collection_name]
 
 
-class PolicyReader:
-    """Class to read data from a MongoDB database."""
+class MongoReader:
+    """Class to read data from MongoDB
 
-    def __init__(self, cursor: AuthenticatedCursor):
+    This class is used to query and read data from a MongoDB collection. The data can
+    be read into a pandas DataFrame or a list of dictionaries. Methods use a
+    context manager to ensure that the connection to the database is closed after
+    each read. Optionally you can disable _id from being returned when reading data.
+
+    Args:
+        cursor: AuthenticatedCursor object to connect to the database. The cursor
+            must have a database and collection set. To set the database and collection
+            use the set_db() and set_collection() methods.
+        exclude_id: If True, _id will be automatically excluded from the response when using
+            read methods, unless it is explicitly included in the method call. Defaults to True.
+
+    """
+
+    def __init__(self, cursor: AuthenticatedCursor, exclude_id: bool = True):
         """Initialize the PolicyReader object."""
         self.cursor = cursor
+        self.exclude_id = exclude_id
 
-        # database have been set
-        if self.cursor._db_name is None:
-            raise ValueError(
-                "Database not set. Use set_db() on the Authenticated cursor object"
-                " to set the database."
-            )
-
-    def get_df(self, query: dict | None = None) -> pd.DataFrame:
+    def _find(self, cursor: AuthenticatedCursor, query: dict | None = None, fields: list | None = None, *args, **kwargs):
         """Get collection as a pandas DataFrame.
 
         Args:
-            query: Query to filter the collection.
+            cursor: AuthenticatedCursor object connected to the collection.
+            query: Query to filter the collection. If None, the entire collection is returned.
+                Defaults to None.
+            fields: Fields to include in the response. Defaults to None. If None, all fields
+                will be returned. If exclude_id is set to True, _id will be excluded from the
+                response unless it is explicitly included in fields.
+        """
+
+        # if query is None set it to an empty dictionary
+        if query is None:
+            query = {}
+
+        # if fields is None set it to an empty dictionary
+        if fields is None:
+            fields = {}
+        # if fields is a list convert it to a dictionary with all fields set to 1
+        else:
+            fields = {field: 1 for field in fields}
+
+        # if exclude_id is True and _id is not in fields, set _id to 0
+        if self.exclude_id and "_id" not in fields:
+            fields["_id"] = 0
+
+        return cursor.collection.find(query, fields, *args, **kwargs)
+
+    def get_data(self, query: dict | None = None, fields: list | None = None, *args, **kwargs) -> list[dict]:
+        """Get the collection data as a list of dictionaries.
+
+        Args:
+            query: Query to filter the collection. If None, the entire collection is returned.
+                Defaults to None.
+            fields: Fields to include in the response. Defaults to None. If None, all fields
+                will be returned. If exclude_id is set to True, _id will be excluded from the
+                response unless it is explicitly included in fields.
+
+        Returns:
+            A list of dictionaries with the collection data.
+        """
+
+        with self.cursor as cursor:
+            cursor_data = self._find(cursor, query, fields, *args, **kwargs)
+            data = list(cursor_data)
+
+            # warn if the list is empty
+            if not data:
+                logger.warning("No data found.")
+
+            return data
+
+    def get_df(self, query: dict | None = None, fields: list | None = None, *args, **kwargs):
+        """Get collection data as a pandas DataFrame.
+
+        Args:
+            query: Query to filter the collection. If None, the entire collection is returned.
+                Defaults to None.
+            fields: Fields to include in the response. Defaults to None. If None, all fields
+                will be returned. If exclude_id is set to True, _id will be excluded from the
+                response unless it is explicitly included in fields.
 
         Returns:
             A pandas DataFrame with the collection data.
         """
-        if query is None:
-            query = {}
+        with self.cursor as cursor:
+            cursor_data = self._find(cursor, query, fields, *args, **kwargs)
+            df = pd.DataFrame.from_records(cursor_data)
+
+            # warn if the DataFrame is empty
+            if df.empty:
+                logger.warning("No data found.")
+
+            return df
+
+
+class MongoWriter:
+    """Class to write data to MongoDB.
+
+    This class is used to load data into a MongoDB collection. It can be used to replace all the data in a collection
+    or to append data to a collection. It contains functionality to backup the collection before
+    performing a write operation and to restore the backup if an error occurs. Methods use a context manager to
+    ensure that any connection to the database is closed after the write operation is complete.
+
+    Args:
+        cursor: AuthenticatedCursor object to connect to the database.The cursor must have a database and collection
+            set. To set the database, use the set_db() method. To set the collection, use the set_collection() method.
+
+    """
+
+    def __init__(self, cursor: AuthenticatedCursor):
+        """Initialize the PolicyWriter object."""
+        self.cursor = cursor
+
+    def drop_all_and_insert(
+            self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False
+            ) -> None:
+        """Replace all the data in a collection
+
+        This function will replace all the data in a collection with the data provided.
+        It will first backup the collection, then drop all the data and insert the new data.
+        If an exception occurs, it will restore the backup. Otherwise, it will delete the backup.
+
+        Args:
+            data: Data to insert in the collection. Can be a list of dictionaries or a pandas DataFrame.
+                  If a DataFrame is provided, it will be converted to a list of dictionaries.
+            preserve_backup: If True, the backup will not be deleted after a successful insert. Defaults to False.
+                  If the backup is preserved, it is accessible as <collection_name>_backup in the database.
+        """
 
         with self.cursor as cursor:
-            return pd.DataFrame(cursor.collection.find(query))
+            # backup the collection by renaming it and create a new collection with the same name
+            cursor.collection.rename(f"{cursor.collection.name}_backup")
+            cursor.db.create_collection(cursor.collection.name)
 
+            try:
 
-class PolicyWriter:
-    """Class to write data from a MongoDB database."""
+                # if data is a pandas DataFrame, convert it to a list of dictionaries
+                if isinstance(data, pd.DataFrame):
+                    data = data.to_dict(orient="records")
 
-    pass
+                bulk_operations = [pymongo.DeleteMany({}),
+                                   *[pymongo.InsertOne(document) for document in data]
+                                   ]
+                result = cursor.collection.bulk_write(bulk_operations)
+                logger.info(
+                    f"Dropped data and inserted {result.inserted_count} documents in collection {cursor.collection.name}")
+
+                # if preserve_backup is True, do not delete it after a successful insert
+                if preserve_backup is False:
+                    cursor.db.drop_collection(f"{cursor.collection.name}_backup")
+
+            except Exception as e:
+                logger.exception(f"Exception occurred. Restoring backup.")
+                cursor.collection.rename(cursor.collection.name)
+                cursor.db.drop_collection(f"{cursor.collection.name}_backup")
+                raise e
+
+    def insert(self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False) -> None:
+        """Insert data to a collection
+
+        This function will insert data to a collection. It will first backup the collection,
+        then append the data to the existing data in the collection. If an exception occurs,
+        it will restore the backup.
+
+        Args:
+            data: Data to insert in the collection. Can be a list of dictionaries or a pandas DataFrame.
+                    If a DataFrame is provided, it will be converted to a list of dictionaries.
+            preserve_backup: If True, the backup will not be deleted after a successful insert. Defaults to False.
+                    If the backup is preserved, it is accessible as <collection_name>_backup in the database.
+        """
+
+        with self.cursor as cursor:
+
+            # backup the collection by creating a mirror
+            cursor.collection.aggregate([{'$out': f"{cursor.collection.name}_backup"}])
+
+            try:
+                # if data is a pandas DataFrame, convert it to a list of dictionaries
+                if isinstance(data, pd.DataFrame):
+                    data = data.to_dict(orient="records")
+
+                bulk_operations = [pymongo.InsertOne(document) for document in data]
+                result = cursor.collection.bulk_write(bulk_operations)
+                logger.info(
+                    f"Inserted {result.inserted_count} documents in collection {cursor.collection.name}")
+
+                # drop the backup collection if the insert was successful
+                if preserve_backup is False:
+                    cursor.db.drop_collection(f"{cursor.collection.name}_backup")
+
+            except Exception as e:
+                logger.exception(f"Exception occurred. Restoring backup. Exception: {e}")
+
+                # restore the backup collection if the insert failed
+                cursor.db.drop_collection(f"{cursor.collection.name}")
+                cursor.db[f"{cursor.collection.name}_backup"].rename(cursor.collection.name)
+                raise e

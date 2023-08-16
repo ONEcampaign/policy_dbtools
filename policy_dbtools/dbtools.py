@@ -25,7 +25,11 @@ CONFIG_PATH = Path(__file__).parent / "config.ini"
 
 
 def set_config_path(path: str) -> None:
-    """Set the path to the config.ini file."""
+    """Set the path to the config.ini file.
+
+    Args:
+        path: Path to the config.ini file.
+    """
 
     global CONFIG_PATH
     CONFIG_PATH = Path(path).resolve()
@@ -39,9 +43,9 @@ def set_config(username: str = None, password: str = None, cluster: str = None) 
     config.ini file.
 
     Args:
-        username (str): Username to authenticate with.
-        password (str): Password to authenticate with.
-        cluster (str): Name of the MongoDB cluster to connect to.
+        username: Username to authenticate with.
+        password: Password to authenticate with.
+        cluster: Name of the MongoDB cluster to connect to.
     """
 
     config = configparser.ConfigParser()
@@ -70,12 +74,12 @@ def _create_uri(cluster: str, username: str, password: str) -> str:
     """Create a MongoDB connection string.
 
     Args:
-        cluster (str): Name of the MongoDB cluster to connect to.
-        username (str): Username to authenticate with.
-        password (str): Password to authenticate with.
+        cluster: Name of the MongoDB cluster to connect to.
+        username: Username to authenticate with.
+        password: Password to authenticate with.
 
     Returns:
-        str: MongoDB connection string.
+        MongoDB connection string.
     """
 
     return (
@@ -93,9 +97,9 @@ def _check_credentials(
     If the credentials are not provided in the configuration file, an error will be raised.
 
     Args:
-        username (str): Username to authenticate with.
-        password (str): Password to authenticate with.
-        cluster (str): Name of the MongoDB cluster to connect to.
+        username: Username to authenticate with.
+        password: Password to authenticate with.
+        cluster: Name of the MongoDB cluster to connect to.
 
     Returns:
         Dictionary containing the username, password, and cluster name.
@@ -273,8 +277,12 @@ class AuthenticatedCursor:
         """MongoDB client object."""
         return self._client
 
-    def set_db(self, db_name: str):
-        """Set the database to connect to."""
+    def set_db(self, db_name: str) -> None:
+        """Set the database to connect to.
+
+        Args:
+            db_name: Name of the database to connect to.
+        """
 
         self.check_valid_db(db_name=db_name)
         self._db_name = db_name
@@ -290,7 +298,11 @@ class AuthenticatedCursor:
         return self._client[self._db_name]
 
     def set_collection(self, collection_name: str) -> None:
-        """Set the collection to connect to."""
+        """Set the collection to connect to.
+
+        Args:
+            collection_name: Name of the collection to connect to.
+        """
 
         if self._db_name is None:
             raise ValueError("Database not set. Use set_db() to set the database.")
@@ -336,7 +348,7 @@ class MongoReader:
         fields: list | None = None,
         *args,
         **kwargs,
-    ):
+    ) -> pymongo.cursor.Cursor:
         """Get collection as a pandas DataFrame.
 
         Args:
@@ -393,7 +405,7 @@ class MongoReader:
 
     def get_df(
         self, query: dict | None = None, fields: list | None = None, *args, **kwargs
-    ):
+    ) -> pd.DataFrame:
         """Get collection data as a pandas DataFrame.
 
         Args:

@@ -1,1 +1,4 @@
-__version__ = "0.0.1"
+# read version from installed package
+from importlib.metadata import version
+
+__version__ = version("policy_dbtools")

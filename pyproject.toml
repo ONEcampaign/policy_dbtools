@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "policy-dbtools"
-version = "0.0.1"
+version = "0.1.0"
 description = "ONE Policy team database tools"
 authors = ["Luca Picci <luca.picci@one.org>"]
 license = "MIT"

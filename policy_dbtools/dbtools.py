@@ -35,7 +35,7 @@ def set_config_path(path: str) -> None:
     CONFIG_PATH = Path(path).resolve()
 
 
-def set_config(username: str = None, password: str = None, cluster: str = None) -> None:
+def set_config(username: str = None, password: str = None, cluster: str = None, db: str = None) -> None:
     """Set configuration file for MongoDB connection.
 
     This functions allows you to set the configuration and credentials for the MongoDB connection,
@@ -46,6 +46,7 @@ def set_config(username: str = None, password: str = None, cluster: str = None) 
         username: Username to authenticate with.
         password: Password to authenticate with.
         cluster: Name of the MongoDB cluster to connect to.
+        db: Name of the database to connect to.
     """
 
     config = configparser.ConfigParser()
@@ -64,6 +65,8 @@ def set_config(username: str = None, password: str = None, cluster: str = None) 
     # if cluster_name is provided, set in config file
     if cluster is not None:
         config["MONGODB"]["MONGO_CLUSTER"] = cluster
+    if db is not None:
+        config["MONGODB"]["MONGO_DB"] = db
 
     # write config file
     with open(CONFIG_PATH, "w") as configfile:
@@ -157,16 +160,18 @@ class AuthenticatedCursor:
     at instantiation or read from a configuration file if not passed as arguments. Use the
     function `set_config()` to set the configuration file.
 
-     Args:
-        username: Username to authenticate with. If not provided, will attempt to read from
-            config.ini file.
-        password: Password to authenticate with. If not provided, will attempt to read from
-            config.ini file.
-        cluster: Name of the MongoDB cluster to connect to. If not provided, will attempt to
-            read from config.ini file.
-        collection_name: Name of the collection to connect to. This is optional and can be set
-            later.
-        db_name: Name of the database to connect to. This is optional and can be set later
+    Attributes:
+        db_name: Name of the database to connect to.
+        db: MongoDB database object.
+
+    Methods:
+        check_connection - test connection to the MongoDB database
+        check_valid_collection - check if a collection exists in the database
+        check_valid_db - check if a database exists
+        connect - connect to the MongoDB database
+        close - close connection to the MongoDB database
+        set_db - set the database to connect to
+
     """
 
     def __init__(
@@ -175,9 +180,18 @@ class AuthenticatedCursor:
         password: str = None,
         cluster: str = None,
         db_name: str = None,
-        collection_name: str = None,
     ):
-        """Initialize the AuthenticatedCursor object."""
+        """Initialize the AuthenticatedCursor object.
+
+        Args:
+            username: Username to authenticate with. If not provided, will attempt to read from
+                config.ini file.
+            password: Password to authenticate with. If not provided, will attempt to read from
+                config.ini file.
+            cluster: Name of the MongoDB cluster to connect to. If not provided, will attempt to
+                read from config.ini file.
+            db_name: Name of the database to connect to. This is optional and can be set later
+        """
 
         credentials = _check_credentials(username, password, cluster)
         self.__uri = _create_uri(**credentials)
@@ -186,13 +200,21 @@ class AuthenticatedCursor:
         self.check_connection()
         self._client = None  # client object
 
-        self._db_name = None
+        # set the database
+        self.db_name = None
+        config = configparser.ConfigParser()
+        config.read(CONFIG_PATH)
+
         if db_name is not None:
             self.set_db(db_name)
 
-        self._collection_name = None
-        if collection_name is not None:
-            self.set_collection(collection_name)
+        elif config.has_option("MONGODB", "MONGO_DB"):
+            self.set_db(config["MONGODB"]["MONGO_DB"])
+
+        else:
+            raise ValueError(
+                "No database name provided. `db_name` must provided or set in config file using set_config()."
+            )
 
     def check_connection(self) -> None:
         """Test connection to MongoDB database."""
@@ -207,22 +229,22 @@ class AuthenticatedCursor:
         except Exception as e:
             raise e
 
-    def check_valid_collection(self, collection_name: str, db_name: str) -> bool:
+    def check_valid_collection(self, collection_name: str) -> bool:
         """Check if a collection exists in a database. If it does not, raise an error.
 
         Args:
             collection_name: Name of the collection to check.
-            db_name: Name of the database to check.
 
         Returns:
             True if the collection exists.
         """
 
         with MongoClient(self.__uri) as client:
-            collection_list = client[db_name].list_collection_names()
+
+            collection_list = client[self.db_name].list_collection_names()
             if collection_name not in collection_list:
                 raise ValueError(
-                    f"Collection {collection_name} does not exist in database {db_name}."
+                    f"Collection {collection_name} does not exist in database {self.db_name}."
                 )
         logger.info(f"Collection authenticated: {collection_name}")
         return True
@@ -285,38 +307,15 @@ class AuthenticatedCursor:
         """
 
         self.check_valid_db(db_name=db_name)
-        self._db_name = db_name
+        self.db_name = db_name
 
     @property
     def db(self) -> Database | None:
-        """MongoDB client object."""
+        """MongoDB database object."""
 
-        if self._db_name is None:
-            return None
         if self._client is None:
             return None
-        return self._client[self._db_name]
-
-    def set_collection(self, collection_name: str) -> None:
-        """Set the collection to connect to.
-
-        Args:
-            collection_name: Name of the collection to connect to.
-        """
-
-        if self._db_name is None:
-            raise ValueError("Database not set. Use set_db() to set the database.")
-        self.check_valid_collection(collection_name, self._db_name)
-        self._collection_name = collection_name
-
-    @property
-    def collection(self) -> Collection | None:
-        """ """
-        if self._collection_name is None:
-            return None
-        if self._client is None:
-            return None
-        return self.db[self._collection_name]
+        return self._client[self.db_name]
 
 
 class MongoReader:
@@ -327,23 +326,55 @@ class MongoReader:
     context manager to ensure that the connection to the database is closed after
     each read. Optionally you can disable _id from being returned when reading data.
 
-    Args:
-        cursor: AuthenticatedCursor object to connect to the database. The cursor
-            must have a database and collection set. To set the database and collection
-            use the set_db() and set_collection() methods.
-        exclude_id: If True, _id will be automatically excluded from the response when using
-            read methods, unless it is explicitly included in the method call. Defaults to True.
+    Attributes:
+        cursor: AuthenticatedCursor object to connect to the database.
+        collection_name: Name of the collection to read from.
+        collection: MongoDB collection object.
+        include_id: If False, _id will be excluded in the response when using
+            read methods, unless it is explicitly excluded in the method call. Defaults to False.
 
+    Methods:
+        get_data - get the collection data as a list of dictionaries
+        get_df - get the collection data as a pandas DataFrame
     """
 
-    def __init__(self, cursor: AuthenticatedCursor, include_id: bool = False):
-        """Initialize the PolicyReader object."""
+    def __init__(self, cursor: AuthenticatedCursor, collection_name: str,*, include_id: bool = False):
+        """Initialize the PolicyReader object.
+
+        Args:
+            cursor: AuthenticatedCursor object to connect to the database.
+            collection_name: Name of the collection to read from.
+            include_id: If False, _id will be excluded in the response when using
+        """
         self.cursor = cursor
+
+        self.collection_name = collection_name
+        self.set_collection(collection_name)
         self.include_id = include_id
+
+    def set_collection(self, collection_name: str) -> None:
+        """Set the collection to connect to
+
+        This method checks that the collection exists in the database, then sets the
+        collection and collection_name attributes.
+
+        Args:
+            collection_name: Name of the collection to connect to.
+        """
+
+        self.cursor.check_valid_collection(collection_name)
+        self.collection_name = collection_name
+
+    @property
+    def collection(self) -> Collection | None:
+        """MongoDB collection object."""
+
+        if self.cursor._client is None:
+            return None
+        return self.cursor.db[self.collection_name]
 
     def _find(
         self,
-        cursor: AuthenticatedCursor,
         query: dict | None = None,
         fields: list | None = None,
         *args,
@@ -352,12 +383,17 @@ class MongoReader:
         """Get collection as a pandas DataFrame.
 
         Args:
-            cursor: AuthenticatedCursor object connected to the collection.
             query: Query to filter the collection. If None, the entire collection is returned.
                 Defaults to None.
             fields: Fields to include in the response. Defaults to None. If None, all fields
                 will be returned. If exclude_id is set to True, _id will be excluded from the
                 response unless it is explicitly included in fields.
+
+            *args: Additional arguments to pass to the pymongo.collection.find() method.
+            **kwargs: Additional keyword arguments to pass to the pymongo.collection.find() method.
+
+        Returns:
+            A pymongo cursor object.
         """
 
         # if query is None set it to an empty dictionary
@@ -375,7 +411,7 @@ class MongoReader:
         if self.include_id is False and "_id" not in fields:
             fields["_id"] = 0
 
-        return cursor.collection.find(query, fields, *args, **kwargs)
+        return self.collection.find(query, fields, *args, **kwargs)
 
     def get_data(
         self, query: dict | None = None, fields: list | None = None, *args, **kwargs
@@ -389,12 +425,15 @@ class MongoReader:
                 will be returned. If exclude_id is set to True, _id will be excluded from the
                 response unless it is explicitly included in fields.
 
+            *args: Additional arguments to pass to the pymongo.collection.find() method.
+            **kwargs: Additional keyword arguments to pass to the pymongo.collection.find() method.
+
         Returns:
             A list of dictionaries with the collection data.
         """
 
-        with self.cursor as cursor:
-            cursor_data = self._find(cursor, query, fields, *args, **kwargs)
+        with self.cursor:
+            cursor_data = self._find(query, fields, *args, **kwargs)
             data = list(cursor_data)
 
             # warn if the list is empty
@@ -415,11 +454,14 @@ class MongoReader:
                 will be returned. If exclude_id is set to True, _id will be excluded from the
                 response unless it is explicitly included in fields.
 
+            *args: Additional arguments to pass to the pymongo.collection.find() method.
+            **kwargs: Additional keyword arguments to pass to the pymongo.collection.find() method.
+
         Returns:
             A pandas DataFrame with the collection data.
         """
-        with self.cursor as cursor:
-            cursor_data = self._find(cursor, query, fields, *args, **kwargs)
+        with self.cursor:
+            cursor_data = self._find(query, fields, *args, **kwargs)
             df = pd.DataFrame.from_records(cursor_data)
 
             # warn if the DataFrame is empty
@@ -437,15 +479,48 @@ class MongoWriter:
     performing a write operation and to restore the backup if an error occurs. Methods use a context manager to
     ensure that any connection to the database is closed after the write operation is complete.
 
-    Args:
-        cursor: AuthenticatedCursor object to connect to the database.The cursor must have a database and collection
-            set. To set the database, use the set_db() method. To set the collection, use the set_collection() method.
+    Attributes:
+        cursor: AuthenticatedCursor object to connect to the database.
+        collection_name: Name of the collection to write to.
+        collection: MongoDB collection object.
+
+    Methods:
+        drop_all_and_insert - replace all the data in a collection
+        insert - insert data to a collection
 
     """
 
-    def __init__(self, cursor: AuthenticatedCursor):
-        """Initialize the PolicyWriter object."""
+    def __init__(self, cursor: AuthenticatedCursor, collection_name: str):
+        """Initialize the PolicyWriter object.
+
+        Args:
+            cursor: AuthenticatedCursor object to connect to the database.
+            collection_name: Name of the collection to write to.
+        """
         self.cursor = cursor
+        self.collection_name = collection_name
+        self.set_collection(collection_name)
+
+    def set_collection(self, collection_name: str) -> None:
+        """Set the collection to connect to
+
+        This method sets checks that the collection exists in the database, then sets the
+        collection and collection_name attributes.
+
+        Args:
+            collection_name: Name of the collection to connect to.
+        """
+
+        self.cursor.check_valid_collection(collection_name)
+        self.collection_name = collection_name
+
+    @property
+    def collection(self) -> Collection | None:
+        """MongoDB collection object."""
+
+        if self.cursor._client is None:
+            return None
+        return self.cursor.db[self.collection_name]
 
     def drop_all_and_insert(
         self, data: list[dict] | pd.DataFrame, *, preserve_backup: bool = False
@@ -465,8 +540,8 @@ class MongoWriter:
 
         with self.cursor as cursor:
             # backup the collection by renaming it and create a new collection with the same name
-            cursor.collection.rename(f"{cursor.collection.name}_backup")
-            cursor.db.create_collection(cursor.collection.name)
+            self.collection.rename(f"{self.collection.name}_backup")
+            cursor.db.create_collection(self.collection.name)
 
             try:
                 # if data is a pandas DataFrame, convert it to a list of dictionaries
@@ -477,19 +552,19 @@ class MongoWriter:
                     pymongo.DeleteMany({}),
                     *[pymongo.InsertOne(document) for document in data],
                 ]
-                result = cursor.collection.bulk_write(bulk_operations)
+                result = self.collection.bulk_write(bulk_operations)
                 logger.info(
-                    f"Dropped data and inserted {result.inserted_count} documents in collection {cursor.collection.name}"
+                    f"Dropped data and inserted {result.inserted_count} documents in collection {self.collection.name}"
                 )
 
                 # if preserve_backup is True, do not delete it after a successful insert
                 if preserve_backup is False:
-                    cursor.db.drop_collection(f"{cursor.collection.name}_backup")
+                    cursor.db.drop_collection(f"{self.collection.name}_backup")
 
             except Exception as e:
                 logger.exception(f"Exception occurred. Restoring backup.")
-                cursor.collection.rename(cursor.collection.name)
-                cursor.db.drop_collection(f"{cursor.collection.name}_backup")
+                self.collection.rename(self.collection.name)
+                cursor.db.drop_collection(f"{self.collection.name}_backup")
                 raise e
 
     def insert(
@@ -510,7 +585,7 @@ class MongoWriter:
 
         with self.cursor as cursor:
             # backup the collection by creating a mirror
-            cursor.collection.aggregate([{"$out": f"{cursor.collection.name}_backup"}])
+            self.collection.aggregate([{"$out": f"{self.collection.name}_backup"}])
 
             try:
                 # if data is a pandas DataFrame, convert it to a list of dictionaries
@@ -518,14 +593,14 @@ class MongoWriter:
                     data = data.to_dict(orient="records")
 
                 bulk_operations = [pymongo.InsertOne(document) for document in data]
-                result = cursor.collection.bulk_write(bulk_operations)
+                result = self.collection.bulk_write(bulk_operations)
                 logger.info(
-                    f"Inserted {result.inserted_count} documents in collection {cursor.collection.name}"
+                    f"Inserted {result.inserted_count} documents in collection {self.collection.name}"
                 )
 
                 # drop the backup collection if the insert was successful
                 if preserve_backup is False:
-                    cursor.db.drop_collection(f"{cursor.collection.name}_backup")
+                    cursor.db.drop_collection(f"{self.collection.name}_backup")
 
             except Exception as e:
                 logger.exception(
@@ -533,8 +608,8 @@ class MongoWriter:
                 )
 
                 # restore the backup collection if the insert failed
-                cursor.db.drop_collection(f"{cursor.collection.name}")
-                cursor.db[f"{cursor.collection.name}_backup"].rename(
-                    cursor.collection.name
+                cursor.db.drop_collection(f"{self.collection.name}")
+                cursor.db[f"{self.collection.name}_backup"].rename(
+                    self.collection.name
                 )
                 raise e

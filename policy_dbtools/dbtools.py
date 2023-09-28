@@ -470,6 +470,29 @@ class MongoReader:
 
             return df
 
+    # method to find if at least one document exists in the collection
+    def exists(self, query: dict | None = None, *args, **kwargs) -> bool:
+        """Find if at least one document exists in the collection that matches a query.
+
+        Args:
+            query: Query to filter the collection.
+
+        Returns:
+            True if at least one document exists in the collection that matches the query.
+            False otherwise.
+        """
+
+        with self.cursor:
+            if query is None:
+                query = {}
+
+            count = self.collection.count_documents(query, *args, **kwargs, limit=1)
+
+        if count > 0:
+            return True
+        else:
+            return False
+
 
 class MongoWriter:
     """Class to write data to MongoDB.

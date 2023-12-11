@@ -162,3 +162,4 @@ cython_debug/
 
 # Ignore .ini files
 *.ini
+policy_dbtools/config.ini

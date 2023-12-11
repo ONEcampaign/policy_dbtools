@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "policy-dbtools"
-version = "0.1.0"
+version = "0.2.0"
 description = "ONE Policy team database tools"
 authors = ["Luca Picci <luca.picci@one.org>"]
 license = "MIT"
@@ -9,8 +9,8 @@ packages = [{include = "policy_dbtools"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-pandas = "1.5.3"
-pymongo = "^4.4.0"
+pandas = "^2"
+pymongo = "^4.4"
 
 
 [tool.poetry.group.dev.dependencies]
